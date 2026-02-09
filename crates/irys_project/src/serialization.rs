@@ -325,9 +325,9 @@ fn color_to_vb6(color: &str) -> String {
     if let Some(hex) = c.strip_prefix('#') {
         if hex.len() == 6 {
             if let Ok(val) = u32::from_str_radix(hex, 16) {
-                let r = val & 0xFF;
+                let r = (val >> 16) & 0xFF;
                 let g = (val >> 8) & 0xFF;
-                let b = (val >> 16) & 0xFF;
+                let b = val & 0xFF;
                 return format!("&H00{:02X}{:02X}{:02X}&", b, g, r);
             }
         }

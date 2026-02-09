@@ -1374,6 +1374,23 @@ impl Interpreter {
             Expression::New(class_id, ctor_args) => {
                 let class_name = class_id.as_str().to_lowercase();
 
+                // Handle Common Dialogs
+                if class_name == "openfiledialog" || class_name.ends_with(".openfiledialog") {
+                    return Ok(crate::builtins::dialogs::create_openfiledialog());
+                }
+                if class_name == "savefiledialog" || class_name.ends_with(".savefiledialog") {
+                    return Ok(crate::builtins::dialogs::create_savefiledialog());
+                }
+                if class_name == "colordialog" || class_name.ends_with(".colordialog") {
+                    return Ok(crate::builtins::dialogs::create_colordialog());
+                }
+                if class_name == "fontdialog" || class_name.ends_with(".fontdialog") {
+                    return Ok(crate::builtins::dialogs::create_fontdialog());
+                }
+                if class_name == "folderbrowserdialog" || class_name.ends_with(".folderbrowserdialog") {
+                    return Ok(crate::builtins::dialogs::create_folderbrowserdialog());
+                }
+
                 if class_name.starts_with("system.windows.forms.") {
                     // Return the base name as a proxy for controls (e.g. "Button", "Label")
                     let base_name = class_id.as_str().split('.').last().unwrap_or(class_id.as_str()).to_string();
@@ -1842,8 +1859,18 @@ impl Interpreter {
             }
         }
 
-        // Evaluate object to check if it's a Collection
+        // Evaluate object to check if it's a Collection or Dialog
         if let Ok(obj_val) = self.evaluate_expr(obj) {
+            // Handle Dialog ShowDialog method
+            if method_name == "showdialog" {
+                if let Value::Object(obj_ref) = &obj_val {
+                    let has_dialog_type = obj_ref.borrow().fields.contains_key("_dialog_type");
+                    if has_dialog_type {
+                        return crate::builtins::dialogs::dialog_showdialog(&obj_val);
+                    }
+                }
+            }
+            
             if let Value::Collection(col_rc) = &obj_val {
                  match method_name.as_str() {
                     "add" => {

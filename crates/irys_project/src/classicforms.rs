@@ -162,6 +162,11 @@ fn map_vb_type_to_control_type(vb_type: &str) -> ControlType {
         "VB.ListBox" => ControlType::ListBox,
         "VB.Frame" => ControlType::Frame,
         "VB.PictureBox" => ControlType::PictureBox,
+        "RichTextLib.RichTextBox" => ControlType::RichTextBox,
+        "SHDocVw.WebBrowser" => ControlType::WebBrowser,
+        "MSComctlLib.TreeView" => ControlType::TreeView,
+        "MSDataGridLib.DataGrid" => ControlType::DataGridView,
+        "MSComctlLib.ListView" => ControlType::ListView,
         _ => ControlType::Button,
     }
 }
@@ -199,6 +204,7 @@ fn parse_prop_color(line: &str) -> Option<String> {
     if raw.starts_with("&H") {
         let trimmed = raw.trim_start_matches("&H").trim_end_matches('&');
         if let Ok(val) = u32::from_str_radix(trimmed, 16) {
+            // VB6 format is &H00BBGGRR& where RR is in bits 0-7, GG in 8-15, BB in 16-23
             let r = (val & 0xFF) as u8;
             let g = ((val >> 8) & 0xFF) as u8;
             let b = ((val >> 16) & 0xFF) as u8;

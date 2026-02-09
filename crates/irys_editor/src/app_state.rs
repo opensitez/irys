@@ -6,6 +6,30 @@ use rfd::FileDialog;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+// Helper function to strip HTML tags for plain text
+fn strip_html_tags(html: &str) -> String {
+    let mut result = String::new();
+    let mut in_tag = false;
+    
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => result.push(c),
+            _ => {}
+        }
+    }
+    
+    // Decode common HTML entities
+    result
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
 #[derive(Clone, Copy)]
 pub struct AppState {
     pub project: Signal<Option<Project>>,
@@ -316,7 +340,11 @@ impl AppState {
                             control.properties.set("URL", value);
                         },
                         "HTML" => {
-                            control.properties.set("HTML", value);
+                            control.properties.set("HTML", value.clone());
+                            // Also update Text property for RichTextBox to keep them in sync
+                            // Strip HTML tags for plain text version
+                            let plain_text = strip_html_tags(&value);
+                            control.set_text(plain_text);
                         },
                         "ToolbarVisible" => {
                             if let Ok(visible) = value.parse::<bool>() {

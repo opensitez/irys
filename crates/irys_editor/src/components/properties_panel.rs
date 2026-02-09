@@ -306,7 +306,9 @@ pub fn PropertiesPanel() -> Element {
                                         irys_forms::ControlType::Label |
                                         irys_forms::ControlType::CheckBox |
                                         irys_forms::ControlType::Frame);
-                                    let has_text = matches!(control.control_type, irys_forms::ControlType::TextBox);
+                                    let has_text = matches!(control.control_type, 
+                                        irys_forms::ControlType::TextBox | 
+                                        irys_forms::ControlType::RichTextBox);
 
                                     rsx! {
                                         div {

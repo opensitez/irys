@@ -131,16 +131,104 @@ pub fn array_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Array(args.to_vec()))
 }
 
-/// InputBox(prompt[, title[, default]]) - Returns input string (stub: returns default or empty)
+/// InputBox(prompt[, title[, default]]) - Shows native input dialog and returns user input
 pub fn inputbox_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    use std::process::Command;
+    
     if args.is_empty() || args.len() > 3 {
         return Err(RuntimeError::Custom("InputBox requires 1 to 3 arguments".to_string()));
     }
-    // In a console/headless environment, just return the default value
+    
+    let prompt = args[0].as_string();
+    let title = if args.len() >= 2 {
+        args[1].as_string()
+    } else {
+        "Input".to_string()
+    };
     let default = if args.len() >= 3 {
         args[2].as_string()
     } else {
         String::new()
     };
-    Ok(Value::String(default))
+    
+    match show_native_input_dialog(&prompt, &title, &default) {
+        Some(input) => Ok(Value::String(input)),
+        None => Ok(Value::String(String::new())), // User cancelled
+    }
+}
+
+/// Show native OS input dialog
+fn show_native_input_dialog(prompt: &str, title: &str, default_value: &str) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        
+        let script = format!(
+            "display dialog \"{}\" default answer \"{}\" with title \"{}\" buttons {{\"OK\", \"Cancel\"}} default button \"OK\"",
+            prompt.replace("\"", "\\\""),
+            default_value.replace("\"", "\\\""),
+            title.replace("\"", "\\\"")
+        );
+        
+        match Command::new("osascript").arg("-e").arg(&script).output() {
+            Ok(output) if output.status.success() => {
+                let result = String::from_utf8_lossy(&output.stdout);
+                // Parse result like "button returned:OK, text returned:Hello"
+                if let Some(text_part) = result.split("text returned:").nth(1) {
+                    return Some(text_part.trim().to_string());
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        
+        match Command::new("zenity")
+            .arg("--entry")
+            .arg(format!("--title={}", title))
+            .arg(format!("--text={}", prompt))
+            .arg(format!("--entry-text={}", default_value))
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            }
+            _ => None,
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        
+        // Use PowerShell with InputBox from VB assembly
+        let script = format!(
+            "[void][Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic'); \
+             [Microsoft.VisualBasic.Interaction]::InputBox('{}', '{}', '{}')",
+            prompt.replace("'", "''"),
+            title.replace("'", "''"),
+            default_value.replace("'", "''")
+        );
+        
+        match Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(&script)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            }
+            _ => None,
+        }
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        None
+    }
 }

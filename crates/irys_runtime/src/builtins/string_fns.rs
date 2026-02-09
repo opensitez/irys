@@ -353,4 +353,140 @@ pub fn format_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     }
 }
 
+/// StrConv(string, conversion, [LCID]) - Convert string case/format
+pub fn strconv_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.is_empty() || args.len() > 3 {
+        return Err(RuntimeError::Custom("StrConv requires 1 to 3 arguments".to_string()));
+    }
+    
+    let s = args[0].as_string();
+    let conversion = if args.len() >= 2 {
+        args[1].as_integer()?
+    } else {
+        1 // Default to uppercase
+    };
+    
+    // VB StrConv constants: 1=Upper, 2=Lower, 3=ProperCase, 64=Unicode, 128=FromUnicode
+    match conversion {
+        1 => Ok(Value::String(s.to_uppercase())),
+        2 => Ok(Value::String(s.to_lowercase())),
+        3 => {
+            // Proper case: capitalize first letter of each word
+            let result = s.split_whitespace()
+                .map(|word| {
+                    let mut chars = word.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            Ok(Value::String(result))
+        }
+        64 | 128 => Ok(Value::String(s)), // Unicode conversion - just return as-is
+        _ => Ok(Value::String(s)),
+    }
+}
 
+/// LSet$(string, length) - Left-align string in field of specified length
+pub fn lset_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::Custom("LSet requires exactly 2 arguments".to_string()));
+    }
+    
+    let s = args[0].as_string();
+    let length = args[1].as_integer()? as usize;
+    
+    if s.len() >= length {
+        Ok(Value::String(s.chars().take(length).collect()))
+    } else {
+        Ok(Value::String(format!("{:<width$}", s, width = length)))
+    }
+}
+
+/// RSet$(string, length) - Right-align string in field of specified length
+pub fn rset_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::Custom("RSet requires exactly 2 arguments".to_string()));
+    }
+    
+    let s = args[0].as_string();
+    let length = args[1].as_integer()? as usize;
+    
+    if s.len() >= length {
+        Ok(Value::String(s.chars().take(length).collect()))
+    } else {
+        Ok(Value::String(format!("{:>width$}", s, width = length)))
+    }
+}
+
+/// Filter(source_array, match_string, [include], [compare]) - Filter array by string match
+pub fn filter_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() < 2 || args.len() > 4 {
+        return Err(RuntimeError::Custom("Filter requires 2 to 4 arguments".to_string()));
+    }
+    
+    let arr = match &args[0] {
+        Value::Array(a) => a.clone(),
+        _ => return Err(RuntimeError::Custom("Filter requires an array as first argument".to_string())),
+    };
+    
+    let match_str = args[1].as_string();
+    let include = if args.len() >= 3 {
+        args[2].as_boolean()?
+    } else {
+        true
+    };
+    let case_sensitive = if args.len() >= 4 {
+        args[3].as_integer()? == 0 // 0=binary (case-sensitive), 1=text (case-insensitive)
+    } else {
+        false // Default to case-insensitive
+    };
+    
+    let filtered: Vec<Value> = arr.into_iter().filter(|v| {
+        let s = v.as_string();
+        let contains = if case_sensitive {
+            s.contains(&match_str)
+        } else {
+            s.to_lowercase().contains(&match_str.to_lowercase())
+        };
+        if include { contains } else { !contains }
+    }).collect();
+    
+    Ok(Value::Array(filtered))
+}
+
+/// FormatDateTime(date, [format]) - Format date/time value
+pub fn formatdatetime_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.is_empty() || args.len() > 2 {
+        return Err(RuntimeError::Custom("FormatDateTime requires 1 to 2 arguments".to_string()));
+    }
+    
+    let date_val = args[0].as_double()?;
+    let format = if args.len() >= 2 {
+        args[1].as_integer()?
+    } else {
+        0 // General date
+    };
+    
+    // Convert OLE automation date to chrono
+    use chrono::{NaiveDate, Duration};
+    let base_date = NaiveDate::from_ymd_opt(1899, 12, 30).unwrap();
+    let days = date_val.floor() as i64;
+    let fraction = date_val.fract();
+    let seconds = (fraction * 86400.0).round() as i64;
+    
+    let date = base_date + Duration::days(days) + Duration::seconds(seconds);
+    
+    // VB format constants: 0=GeneralDate, 1=LongDate, 2=ShortDate, 3=LongTime, 4=ShortTime
+    let formatted = match format {
+        1 => date.format("%A, %B %d, %Y").to_string(), // Long date
+        2 => date.format("%m/%d/%Y").to_string(), // Short date
+        3 => date.format("%I:%M:%S %p").to_string(), // Long time
+        4 => date.format("%I:%M %p").to_string(), // Short time
+        _ => date.format("%m/%d/%Y %I:%M:%S %p").to_string(), // General date
+    };
+    
+    Ok(Value::String(formatted))
+}

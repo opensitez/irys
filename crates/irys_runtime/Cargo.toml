@@ -11,6 +11,7 @@ irys_forms = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 chrono = "0.4"
+rfd = { workspace = true }
 
 [dev-dependencies]
 pest = { workspace = true }
