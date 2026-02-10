@@ -8,6 +8,10 @@ pub fn evaluate(expr: &Expression, env: &Environment) -> Result<Value, RuntimeEr
         Expression::DoubleLiteral(d) => Ok(Value::Double(*d)),
         Expression::StringLiteral(s) => Ok(Value::String(s.clone())),
         Expression::BooleanLiteral(b) => Ok(Value::Boolean(*b)),
+        Expression::DateLiteral(s) => {
+            // Parse the date string from #...# literal and convert to OLE date
+            crate::builtins::cdate_fn(&[Value::String(s.clone())])
+        }
         Expression::Nothing => Ok(Value::Nothing),
 
         Expression::Variable(name) => env.get(name.as_str()),

@@ -143,6 +143,24 @@ impl Interpreter {
         self.env.define_const("vbtab", Value::String("\t".to_string()));
         self.env.define_const("vbbinarycompare", Value::Integer(0));
         self.env.define_const("vbtextcompare", Value::Integer(1));
+
+        // Math constants
+        self.env.define_const("math.pi", Value::Double(std::f64::consts::PI));
+        self.env.define_const("math.e", Value::Double(std::f64::consts::E));
+
+        // Environment.NewLine
+        if cfg!(target_os = "windows") {
+            self.env.define_const("environment.newline", Value::String("\r\n".to_string()));
+        } else {
+            self.env.define_const("environment.newline", Value::String("\n".to_string()));
+        }
+
+        // RegexOptions constants
+        self.env.define_const("regexoptions.none", Value::Integer(0));
+        self.env.define_const("regexoptions.ignorecase", Value::Integer(1));
+        self.env.define_const("regexoptions.multiline", Value::Integer(2));
+        self.env.define_const("regexoptions.singleline", Value::Integer(16));
+        self.env.define_const("regexoptions.ignorepatternwhitespace", Value::Integer(32));
     }
 
     pub fn run(&mut self, program: &Program) -> Result<(), RuntimeError> {
@@ -1564,6 +1582,93 @@ impl Interpreter {
                     return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
                 }
 
+                // System.Random
+                if class_name == "random" || class_name == "system.random" {
+                    let seed = if !ctor_args.is_empty() {
+                        self.evaluate_expr(&ctor_args[0])?.as_integer()? as u64
+                    } else {
+                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64
+                    };
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Random".to_string()));
+                    fields.insert("__seed".to_string(), Value::Long(seed as i64));
+                    fields.insert("__counter".to_string(), Value::Long(0));
+                    let obj = crate::value::ObjectData { class_name: "Random".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // System.Diagnostics.Stopwatch
+                if class_name == "stopwatch" || class_name == "system.diagnostics.stopwatch" {
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Stopwatch".to_string()));
+                    fields.insert("isrunning".to_string(), Value::Boolean(false));
+                    fields.insert("elapsedmilliseconds".to_string(), Value::Long(0));
+                    fields.insert("__start_ms".to_string(), Value::Long(0));
+                    fields.insert("__accumulated_ms".to_string(), Value::Long(0));
+                    let obj = crate::value::ObjectData { class_name: "Stopwatch".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // System.IO.StreamReader
+                if class_name == "streamreader" || class_name == "system.io.streamreader" {
+                    let path = if !ctor_args.is_empty() {
+                        self.evaluate_expr(&ctor_args[0])?.as_string()
+                    } else {
+                        return Err(RuntimeError::Custom("StreamReader requires a file path".to_string()));
+                    };
+                    let content = std::fs::read_to_string(&path)
+                        .map_err(|e| RuntimeError::Custom(format!("StreamReader: {}", e)))?;
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("StreamReader".to_string()));
+                    fields.insert("__content".to_string(), Value::String(content));
+                    fields.insert("__position".to_string(), Value::Integer(0));
+                    fields.insert("__closed".to_string(), Value::Boolean(false));
+                    let obj = crate::value::ObjectData { class_name: "StreamReader".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // System.IO.StreamWriter
+                if class_name == "streamwriter" || class_name == "system.io.streamwriter" {
+                    let path = if !ctor_args.is_empty() {
+                        self.evaluate_expr(&ctor_args[0])?.as_string()
+                    } else {
+                        return Err(RuntimeError::Custom("StreamWriter requires a file path".to_string()));
+                    };
+                    let append = if ctor_args.len() >= 2 {
+                        self.evaluate_expr(&ctor_args[1])?.as_bool()?
+                    } else {
+                        false
+                    };
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("StreamWriter".to_string()));
+                    fields.insert("__path".to_string(), Value::String(path));
+                    fields.insert("__buffer".to_string(), Value::String(String::new()));
+                    fields.insert("__append".to_string(), Value::Boolean(append));
+                    fields.insert("__closed".to_string(), Value::Boolean(false));
+                    let obj = crate::value::ObjectData { class_name: "StreamWriter".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // Regex instance: New Regex(pattern) or New Regex(pattern, options)
+                if class_name == "regex" || class_name == "system.text.regularexpressions.regex" {
+                    let pattern = if !ctor_args.is_empty() {
+                        self.evaluate_expr(&ctor_args[0])?.as_string()
+                    } else {
+                        return Err(RuntimeError::Custom("Regex requires a pattern".to_string()));
+                    };
+                    let options = if ctor_args.len() >= 2 {
+                        self.evaluate_expr(&ctor_args[1])?.as_integer()? // RegexOptions flags
+                    } else {
+                        0
+                    };
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Regex".to_string()));
+                    fields.insert("__pattern".to_string(), Value::String(pattern));
+                    fields.insert("__options".to_string(), Value::Integer(options));
+                    let obj = crate::value::ObjectData { class_name: "Regex".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
                 // StringContent (System.Net.Http.StringContent) — for PostAsync
                 if class_name == "stringcontent" || class_name == "system.net.http.stringcontent" {
                     let content = if !ctor_args.is_empty() {
@@ -1651,6 +1756,53 @@ impl Interpreter {
                     return Ok(Value::Nothing);
                 }
 
+                // Try static/qualified property access (e.g., Environment.CurrentDirectory, Math.PI)
+                match full_path.as_str() {
+                    "environment.currentdirectory" => return Ok(Value::String(std::env::current_dir().unwrap_or_default().to_string_lossy().to_string())),
+                    "environment.machinename" => {
+                        let name = std::env::var("HOSTNAME")
+                            .or_else(|_| std::env::var("COMPUTERNAME"))
+                            .unwrap_or_else(|_| {
+                                std::process::Command::new("hostname").output()
+                                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                    .unwrap_or_else(|_| "localhost".to_string())
+                            });
+                        return Ok(Value::String(name));
+                    }
+                    "environment.username" => return Ok(Value::String(std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default())),
+                    "environment.osversion" => {
+                        #[cfg(target_os = "macos")]
+                        return Ok(Value::String("Mac OS X".to_string()));
+                        #[cfg(target_os = "windows")]
+                        return Ok(Value::String("Microsoft Windows NT".to_string()));
+                        #[cfg(target_os = "linux")]
+                        return Ok(Value::String("Unix".to_string()));
+                        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+                        return Ok(Value::String("Unknown".to_string()));
+                    }
+                    "environment.processorcount" => return Ok(Value::Integer(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as i32)),
+                    "environment.is64bitoperatingsystem" => return Ok(Value::Boolean(cfg!(target_pointer_width = "64"))),
+                    "environment.newline" => return Ok(Value::String("\n".to_string())),
+                    "environment.tickcount" | "environment.tickcount64" => {
+                        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                        return Ok(Value::Long(ms));
+                    }
+                    "environment.version" => return Ok(Value::String("4.0.0".to_string())),
+                    "guid.empty" => return Ok(Value::String("00000000-0000-0000-0000-000000000000".to_string())),
+                    "path.directoryseparatorchar" => return Ok(Value::String("/".to_string())),
+                    _ => {}
+                }
+
+                // Check if the full_path corresponds to a registered constant
+                if let Ok(val) = self.env.get(&full_path) {
+                    return Ok(val.clone());
+                }
+                // Also check original-case
+                let full_path_orig = format!("{}.{}", self.expr_to_string(obj), member.as_str());
+                if let Ok(val) = self.env.get(&full_path_orig) {
+                    return Ok(val.clone());
+                }
+
                 let obj_val = self.evaluate_expr(obj)?;
                 
                 // Collection Properties
@@ -1697,11 +1849,49 @@ impl Interpreter {
                     }
                 }
 
+                // String Properties (Length, Chars)
+                if let Value::String(s) = &obj_val {
+                    let m = member.as_str().to_lowercase();
+                    if m == "length" {
+                        return Ok(Value::Integer(s.len() as i32));
+                    }
+                }
+
+                // Boolean Properties (via string)
+                // Integer/Long/Double properties - fallback to env lookup below
+
                 if let Value::Object(obj_ref) = &obj_val {
                     let class_name_str;
                     {
                         let obj_data = obj_ref.borrow();
                         class_name_str = obj_data.class_name.clone();
+
+                        // Special: Stopwatch.ElapsedMilliseconds — compute live if running
+                        if class_name_str == "Stopwatch" && member.as_str().eq_ignore_ascii_case("ElapsedMilliseconds") {
+                            let is_running = obj_data.fields.get("isrunning").map(|v| if let Value::Boolean(b) = v { *b } else { false }).unwrap_or(false);
+                            let accumulated = obj_data.fields.get("__accumulated_ms").map(|v| if let Value::Long(l) = v { *l } else { 0 }).unwrap_or(0);
+                            if is_running {
+                                let start = obj_data.fields.get("__start_ms").map(|v| if let Value::Long(l) = v { *l } else { 0 }).unwrap_or(0);
+                                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                                return Ok(Value::Long(accumulated + (now_ms - start)));
+                            } else {
+                                return Ok(Value::Long(accumulated));
+                            }
+                        }
+
+                        // Special: Guid.ToString() and Guid member access
+                        if class_name_str == "Guid" && member.as_str().eq_ignore_ascii_case("ToString") {
+                            if let Some(val) = obj_data.fields.get("__value") {
+                                return Ok(val.clone());
+                            }
+                        }
+
+                        // Special: StreamReader.EndOfStream
+                        if class_name_str == "StreamReader" && member.as_str().eq_ignore_ascii_case("EndOfStream") {
+                            let content_len = obj_data.fields.get("__content").map(|v| v.as_string().len()).unwrap_or(0);
+                            let pos = obj_data.fields.get("__position").map(|v| if let Value::Integer(i) = v { *i as usize } else { 0 }).unwrap_or(0);
+                            return Ok(Value::Boolean(pos >= content_len));
+                        }
                         
                         // 1. Check if it's a field in the map (case-insensitive)
                         if let Some(val) = obj_data.fields.get(&member.as_str().to_lowercase()) {
@@ -2050,9 +2240,6 @@ impl Interpreter {
             "csbyte" => return csbyte_fn(&arg_values),
             "ascw" => return ascw_fn(&arg_values),
             "chrw" | "chrw$" => return chrw_fn(&arg_values),
-            "oct" | "oct$" => return oct_fn(&arg_values),
-            "hex" | "hex$" => return hex_fn(&arg_values),
-
             // DateTime functions additions
             "dateadd" => return dateadd_fn(&arg_values),
             "datediff" => return datediff_fn(&arg_values),
@@ -2205,9 +2392,74 @@ impl Interpreter {
 
         // Evaluate object to check if it's a Collection or Dialog
         if let Ok(obj_val) = self.evaluate_expr(obj) {
+            // Universal value methods (works on any type: Integer, String, Double, Boolean, etc.)
+            match method_name.as_str() {
+                "tostring" => {
+                    // For typed objects, check special ToString implementations
+                    if let Value::Object(obj_ref) = &obj_val {
+                        let tn = obj_ref.borrow().fields.get("__type").and_then(|v| {
+                            if let Value::String(s) = v { Some(s.clone()) } else { None }
+                        }).unwrap_or_default();
+                        if tn == "Guid" {
+                            let val = obj_ref.borrow().fields.get("__value").cloned().unwrap_or(Value::String(String::new()));
+                            return Ok(val);
+                        }
+                        if tn == "Stopwatch" {
+                            let elapsed = obj_ref.borrow().fields.get("elapsedmilliseconds").cloned().unwrap_or(Value::Long(0));
+                            return Ok(Value::String(format!("{}ms", elapsed.as_string())));
+                        }
+                    }
+                    return Ok(Value::String(obj_val.as_string()));
+                }
+                "gethashcode" => return Ok(Value::Integer(obj_val.as_string().len() as i32)),
+                "gettype" => {
+                    let type_str = match &obj_val {
+                        Value::Integer(_) => "System.Int32",
+                        Value::Long(_) => "System.Int64",
+                        Value::Single(_) => "System.Single",
+                        Value::Double(_) => "System.Double",
+                        Value::String(_) => "System.String",
+                        Value::Boolean(_) => "System.Boolean",
+                        Value::Byte(_) => "System.Byte",
+                        Value::Char(_) => "System.Char",
+                        Value::Date(_) => "System.DateTime",
+                        Value::Array(_) => "System.Array",
+                        Value::Nothing => "System.Object",
+                        Value::Object(_) => "System.Object",
+                        _ => "System.Object",
+                    };
+                    return Ok(Value::String(type_str.to_string()));
+                }
+                "equals" => {
+                    let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                        .map(|arg| self.evaluate_expr(arg))
+                        .collect();
+                    let arg_values = arg_values?;
+                    let other = arg_values.get(0).cloned().unwrap_or(Value::Nothing);
+                    return Ok(Value::Boolean(obj_val.as_string() == other.as_string()));
+                }
+                "compareto" => {
+                    let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                        .map(|arg| self.evaluate_expr(arg))
+                        .collect();
+                    let arg_values = arg_values?;
+                    let other = arg_values.get(0).cloned().unwrap_or(Value::Nothing);
+                    let cmp = obj_val.as_string().cmp(&other.as_string());
+                    return Ok(Value::Integer(match cmp {
+                        std::cmp::Ordering::Less => -1,
+                        std::cmp::Ordering::Equal => 0,
+                        std::cmp::Ordering::Greater => 1,
+                    }));
+                }
+                _ => {}
+            }
+
             // Handle StringBuilder methods
             if let Value::Object(obj_ref) = &obj_val {
-                if let Some(Value::String(type_name)) = obj_ref.borrow().fields.get("__type") {
+                let type_name = obj_ref.borrow().fields.get("__type").and_then(|v| {
+                    if let Value::String(s) = v { Some(s.clone()) } else { None }
+                }).unwrap_or_default();
+                if !type_name.is_empty() {
                     if type_name == "StringBuilder" {
                         let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
                             .map(|arg| self.evaluate_expr(arg))
@@ -2509,6 +2761,280 @@ impl Interpreter {
                             _ => {}
                         }
                     }
+
+                    // Random instance methods
+                    if type_name == "Random" {
+                        let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                            .map(|arg| self.evaluate_expr(arg))
+                            .collect();
+                        let arg_values = arg_values?;
+                        match method_name.as_str() {
+                            "next" => {
+                                // Simple LCG random number generator
+                                let seed = obj_ref.borrow().fields.get("__seed").map(|v| {
+                                    if let Value::Long(l) = v { *l as u64 } else { 0u64 }
+                                }).unwrap_or(0);
+                                let counter = obj_ref.borrow().fields.get("__counter").map(|v| {
+                                    if let Value::Long(l) = v { *l as u64 } else { 0u64 }
+                                }).unwrap_or(0);
+                                let state = seed.wrapping_add(counter).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                                let raw = ((state >> 33) ^ state) as i64;
+                                let raw = raw.unsigned_abs();
+                                obj_ref.borrow_mut().fields.insert("__counter".to_string(), Value::Long((counter + 1) as i64));
+                                match arg_values.len() {
+                                    0 => {
+                                        return Ok(Value::Integer((raw % (i32::MAX as u64)) as i32));
+                                    }
+                                    1 => {
+                                        let max = arg_values[0].as_integer()? as u64;
+                                        if max == 0 { return Ok(Value::Integer(0)); }
+                                        return Ok(Value::Integer((raw % max) as i32));
+                                    }
+                                    _ => {
+                                        let min = arg_values[0].as_integer()?;
+                                        let max = arg_values[1].as_integer()?;
+                                        let range = (max - min) as u64;
+                                        if range == 0 { return Ok(Value::Integer(min)); }
+                                        return Ok(Value::Integer(min + (raw % range) as i32));
+                                    }
+                                }
+                            }
+                            "nextdouble" => {
+                                let seed = obj_ref.borrow().fields.get("__seed").map(|v| {
+                                    if let Value::Long(l) = v { *l as u64 } else { 0u64 }
+                                }).unwrap_or(0);
+                                let counter = obj_ref.borrow().fields.get("__counter").map(|v| {
+                                    if let Value::Long(l) = v { *l as u64 } else { 0u64 }
+                                }).unwrap_or(0);
+                                let state = seed.wrapping_add(counter).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                                let raw = ((state >> 33) ^ state) as u64;
+                                obj_ref.borrow_mut().fields.insert("__counter".to_string(), Value::Long((counter + 1) as i64));
+                                let val = (raw as f64) / (u64::MAX as f64);
+                                return Ok(Value::Double(val));
+                            }
+                            "nextbytes" => {
+                                let count = arg_values.get(0).map(|v| v.as_string().parse::<usize>().unwrap_or(0)).unwrap_or(0);
+                                let mut bytes = Vec::new();
+                                let seed = obj_ref.borrow().fields.get("__seed").map(|v| {
+                                    if let Value::Long(l) = v { *l as u64 } else { 0u64 }
+                                }).unwrap_or(0);
+                                let mut counter = obj_ref.borrow().fields.get("__counter").map(|v| {
+                                    if let Value::Long(l) = v { *l as u64 } else { 0u64 }
+                                }).unwrap_or(0);
+                                for _ in 0..count {
+                                    let state = seed.wrapping_add(counter).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                                    bytes.push(Value::Byte((state >> 40) as u8));
+                                    counter += 1;
+                                }
+                                obj_ref.borrow_mut().fields.insert("__counter".to_string(), Value::Long(counter as i64));
+                                return Ok(Value::Array(bytes));
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Stopwatch instance methods
+                    if type_name == "Stopwatch" {
+                        match method_name.as_str() {
+                            "start" => {
+                                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                                obj_ref.borrow_mut().fields.insert("__start_ms".to_string(), Value::Long(now_ms));
+                                obj_ref.borrow_mut().fields.insert("isrunning".to_string(), Value::Boolean(true));
+                                return Ok(Value::Nothing);
+                            }
+                            "stop" => {
+                                let is_running = obj_ref.borrow().fields.get("isrunning").map(|v| if let Value::Boolean(b) = v { *b } else { false }).unwrap_or(false);
+                                if is_running {
+                                    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                                    let start = obj_ref.borrow().fields.get("__start_ms").map(|v| if let Value::Long(l) = v { *l } else { 0 }).unwrap_or(0);
+                                    let accumulated = obj_ref.borrow().fields.get("__accumulated_ms").map(|v| if let Value::Long(l) = v { *l } else { 0 }).unwrap_or(0);
+                                    let elapsed = accumulated + (now_ms - start);
+                                    obj_ref.borrow_mut().fields.insert("__accumulated_ms".to_string(), Value::Long(elapsed));
+                                    obj_ref.borrow_mut().fields.insert("elapsedmilliseconds".to_string(), Value::Long(elapsed));
+                                    obj_ref.borrow_mut().fields.insert("isrunning".to_string(), Value::Boolean(false));
+                                }
+                                return Ok(Value::Nothing);
+                            }
+                            "reset" => {
+                                obj_ref.borrow_mut().fields.insert("__accumulated_ms".to_string(), Value::Long(0));
+                                obj_ref.borrow_mut().fields.insert("__start_ms".to_string(), Value::Long(0));
+                                obj_ref.borrow_mut().fields.insert("elapsedmilliseconds".to_string(), Value::Long(0));
+                                obj_ref.borrow_mut().fields.insert("isrunning".to_string(), Value::Boolean(false));
+                                return Ok(Value::Nothing);
+                            }
+                            "restart" => {
+                                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                                obj_ref.borrow_mut().fields.insert("__accumulated_ms".to_string(), Value::Long(0));
+                                obj_ref.borrow_mut().fields.insert("__start_ms".to_string(), Value::Long(now_ms));
+                                obj_ref.borrow_mut().fields.insert("elapsedmilliseconds".to_string(), Value::Long(0));
+                                obj_ref.borrow_mut().fields.insert("isrunning".to_string(), Value::Boolean(true));
+                                return Ok(Value::Nothing);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // StreamReader instance methods
+                    if type_name == "StreamReader" {
+                        match method_name.as_str() {
+                            "readline" => {
+                                let content = obj_ref.borrow().fields.get("__content").map(|v| v.as_string()).unwrap_or_default();
+                                let pos = obj_ref.borrow().fields.get("__position").map(|v| if let Value::Integer(i) = v { *i as usize } else { 0 }).unwrap_or(0);
+                                if pos >= content.len() {
+                                    return Ok(Value::Nothing); // EOF
+                                }
+                                let remaining = &content[pos..];
+                                if let Some(nl) = remaining.find('\n') {
+                                    let line = remaining[..nl].trim_end_matches('\r').to_string();
+                                    obj_ref.borrow_mut().fields.insert("__position".to_string(), Value::Integer((pos + nl + 1) as i32));
+                                    return Ok(Value::String(line));
+                                } else {
+                                    obj_ref.borrow_mut().fields.insert("__position".to_string(), Value::Integer(content.len() as i32));
+                                    return Ok(Value::String(remaining.to_string()));
+                                }
+                            }
+                            "readtoend" => {
+                                let content = obj_ref.borrow().fields.get("__content").map(|v| v.as_string()).unwrap_or_default();
+                                let pos = obj_ref.borrow().fields.get("__position").map(|v| if let Value::Integer(i) = v { *i as usize } else { 0 }).unwrap_or(0);
+                                obj_ref.borrow_mut().fields.insert("__position".to_string(), Value::Integer(content.len() as i32));
+                                if pos >= content.len() {
+                                    return Ok(Value::String(String::new()));
+                                }
+                                return Ok(Value::String(content[pos..].to_string()));
+                            }
+                            "peek" => {
+                                let content = obj_ref.borrow().fields.get("__content").map(|v| v.as_string()).unwrap_or_default();
+                                let pos = obj_ref.borrow().fields.get("__position").map(|v| if let Value::Integer(i) = v { *i as usize } else { 0 }).unwrap_or(0);
+                                if pos >= content.len() { return Ok(Value::Integer(-1)); }
+                                return Ok(Value::Integer(content.as_bytes()[pos] as i32));
+                            }
+                            "close" | "dispose" => {
+                                obj_ref.borrow_mut().fields.insert("__closed".to_string(), Value::Boolean(true));
+                                return Ok(Value::Nothing);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // StreamWriter instance methods
+                    if type_name == "StreamWriter" {
+                        let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                            .map(|arg| self.evaluate_expr(arg))
+                            .collect();
+                        let arg_values = arg_values?;
+                        match method_name.as_str() {
+                            "write" => {
+                                let text = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                                let mut buf = obj_ref.borrow().fields.get("__buffer").map(|v| v.as_string()).unwrap_or_default();
+                                buf.push_str(&text);
+                                obj_ref.borrow_mut().fields.insert("__buffer".to_string(), Value::String(buf));
+                                return Ok(Value::Nothing);
+                            }
+                            "writeline" => {
+                                let text = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                                let mut buf = obj_ref.borrow().fields.get("__buffer").map(|v| v.as_string()).unwrap_or_default();
+                                buf.push_str(&text);
+                                buf.push('\n');
+                                obj_ref.borrow_mut().fields.insert("__buffer".to_string(), Value::String(buf));
+                                return Ok(Value::Nothing);
+                            }
+                            "flush" => {
+                                let path = obj_ref.borrow().fields.get("__path").map(|v| v.as_string()).unwrap_or_default();
+                                let buf = obj_ref.borrow().fields.get("__buffer").map(|v| v.as_string()).unwrap_or_default();
+                                let append = obj_ref.borrow().fields.get("__append").map(|v| if let Value::Boolean(b) = v { *b } else { false }).unwrap_or(false);
+                                if append {
+                                    use std::io::Write;
+                                    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+                                        .map_err(|e| RuntimeError::Custom(format!("StreamWriter.Flush: {}", e)))?;
+                                    f.write_all(buf.as_bytes()).map_err(|e| RuntimeError::Custom(format!("StreamWriter.Flush: {}", e)))?;
+                                } else {
+                                    std::fs::write(&path, &buf).map_err(|e| RuntimeError::Custom(format!("StreamWriter.Flush: {}", e)))?;
+                                }
+                                obj_ref.borrow_mut().fields.insert("__buffer".to_string(), Value::String(String::new()));
+                                obj_ref.borrow_mut().fields.insert("__append".to_string(), Value::Boolean(true));
+                                return Ok(Value::Nothing);
+                            }
+                            "close" | "dispose" => {
+                                let path = obj_ref.borrow().fields.get("__path").map(|v| v.as_string()).unwrap_or_default();
+                                let buf = obj_ref.borrow().fields.get("__buffer").map(|v| v.as_string()).unwrap_or_default();
+                                let append = obj_ref.borrow().fields.get("__append").map(|v| if let Value::Boolean(b) = v { *b } else { false }).unwrap_or(false);
+                                if !buf.is_empty() {
+                                    if append {
+                                        use std::io::Write;
+                                        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+                                            .map_err(|e| RuntimeError::Custom(format!("StreamWriter.Close: {}", e)))?;
+                                        f.write_all(buf.as_bytes()).map_err(|e| RuntimeError::Custom(format!("StreamWriter.Close: {}", e)))?;
+                                    } else {
+                                        std::fs::write(&path, &buf).map_err(|e| RuntimeError::Custom(format!("StreamWriter.Close: {}", e)))?;
+                                    }
+                                }
+                                obj_ref.borrow_mut().fields.insert("__buffer".to_string(), Value::String(String::new()));
+                                obj_ref.borrow_mut().fields.insert("__closed".to_string(), Value::Boolean(true));
+                                return Ok(Value::Nothing);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Regex instance methods
+                    if type_name == "Regex" {
+                        let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                            .map(|arg| self.evaluate_expr(arg))
+                            .collect();
+                        let arg_values = arg_values?;
+                        let pattern = obj_ref.borrow().fields.get("__pattern").map(|v| v.as_string()).unwrap_or_default();
+                        let options = obj_ref.borrow().fields.get("__options").map(|v| if let Value::Integer(i) = v { *i } else { 0 }).unwrap_or(0);
+                        let full_pattern = if options & 1 != 0 {
+                            format!("(?i){}", pattern)
+                        } else {
+                            pattern.clone()
+                        };
+                        match method_name.as_str() {
+                            "ismatch" => {
+                                let input = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                                match regex::Regex::new(&full_pattern) {
+                                    Ok(re) => return Ok(Value::Boolean(re.is_match(&input))),
+                                    Err(e) => return Err(RuntimeError::Custom(format!("Invalid regex: {}", e))),
+                                }
+                            }
+                            "match" => {
+                                let input = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                                let args_for_fn = vec![Value::String(input), Value::String(full_pattern)];
+                                return crate::builtins::text_fns::regex_match_fn(&args_for_fn);
+                            }
+                            "matches" => {
+                                let input = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                                let args_for_fn = vec![Value::String(input), Value::String(full_pattern)];
+                                return crate::builtins::text_fns::regex_matches_fn(&args_for_fn);
+                            }
+                            "replace" => {
+                                let input = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                                let replacement = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                                let args_for_fn = vec![Value::String(input), Value::String(full_pattern), Value::String(replacement)];
+                                return crate::builtins::text_fns::regex_replace_fn(&args_for_fn);
+                            }
+                            "split" => {
+                                let input = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                                let args_for_fn = vec![Value::String(input), Value::String(full_pattern)];
+                                return crate::builtins::text_fns::regex_split_fn(&args_for_fn);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // General .ToString() for typed objects
+                    if method_name == "tostring" {
+                        if type_name == "Guid" {
+                            let val = obj_ref.borrow().fields.get("__value").cloned().unwrap_or(Value::String(String::new()));
+                            return Ok(val);
+                        }
+                        if type_name == "Stopwatch" {
+                            let elapsed = obj_ref.borrow().fields.get("elapsedmilliseconds").cloned().unwrap_or(Value::Long(0));
+                            return Ok(Value::String(format!("{}ms", elapsed.as_string())));
+                        }
+                        // Default: return class name
+                        return Ok(Value::String(type_name.to_string()));
+                    }
                 }
             }
             
@@ -2559,6 +3085,126 @@ impl Interpreter {
                     }
                     "count" => {
                         return Ok(Value::Integer(col_rc.borrow().count()));
+                    }
+                    "sort" => {
+                        let items = &mut col_rc.borrow_mut().items;
+                        items.sort_by(|a, b| {
+                            let sa = a.as_string();
+                            let sb = b.as_string();
+                            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        return Ok(Value::Nothing);
+                    }
+                    "reverse" => {
+                        col_rc.borrow_mut().items.reverse();
+                        return Ok(Value::Nothing);
+                    }
+                    "indexof" => {
+                        let val = self.evaluate_expr(&args[0])?;
+                        let idx = col_rc.borrow().items.iter().position(|v| {
+                            crate::evaluator::values_equal(v, &val)
+                        }).map(|i| i as i32).unwrap_or(-1);
+                        return Ok(Value::Integer(idx));
+                    }
+                    "contains" => {
+                        let val = self.evaluate_expr(&args[0])?;
+                        let found = col_rc.borrow().items.iter().any(|v| {
+                            crate::evaluator::values_equal(v, &val)
+                        });
+                        return Ok(Value::Boolean(found));
+                    }
+                    "insert" => {
+                        let idx = self.evaluate_expr(&args[0])?.as_integer()? as usize;
+                        let val = self.evaluate_expr(&args[1])?;
+                        let items = &mut col_rc.borrow_mut().items;
+                        if idx <= items.len() {
+                            items.insert(idx, val);
+                        } else {
+                            items.push(val);
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "addrange" => {
+                        let val = self.evaluate_expr(&args[0])?;
+                        if let Value::Array(arr) = val {
+                            for v in arr {
+                                col_rc.borrow_mut().add(v);
+                            }
+                        } else if let Value::Collection(other) = val {
+                            let items: Vec<Value> = other.borrow().items.clone();
+                            for v in items {
+                                col_rc.borrow_mut().add(v);
+                            }
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "find" => {
+                        let predicate = self.evaluate_expr(&args[0])?;
+                        let items = col_rc.borrow().items.clone();
+                        for item in &items {
+                            let result = self.call_lambda(predicate.clone(), &[item.clone()])?;
+                            if result.as_bool()? {
+                                return Ok(item.clone());
+                            }
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "findall" => {
+                        let predicate = self.evaluate_expr(&args[0])?;
+                        let items = col_rc.borrow().items.clone();
+                        let mut result = Vec::new();
+                        for item in &items {
+                            let r = self.call_lambda(predicate.clone(), &[item.clone()])?;
+                            if r.as_bool()? {
+                                result.push(item.clone());
+                            }
+                        }
+                        return Ok(Value::Array(result));
+                    }
+                    "exists" => {
+                        let predicate = self.evaluate_expr(&args[0])?;
+                        let items = col_rc.borrow().items.clone();
+                        for item in &items {
+                            let r = self.call_lambda(predicate.clone(), &[item.clone()])?;
+                            if r.as_bool()? {
+                                return Ok(Value::Boolean(true));
+                            }
+                        }
+                        return Ok(Value::Boolean(false));
+                    }
+                    "removeall" => {
+                        let predicate = self.evaluate_expr(&args[0])?;
+                        let items = col_rc.borrow().items.clone();
+                        let mut removed = 0i32;
+                        let mut keep = Vec::new();
+                        for item in &items {
+                            let r = self.call_lambda(predicate.clone(), &[item.clone()])?;
+                            if r.as_bool()? {
+                                removed += 1;
+                            } else {
+                                keep.push(item.clone());
+                            }
+                        }
+                        col_rc.borrow_mut().items = keep;
+                        return Ok(Value::Integer(removed));
+                    }
+                    "foreach" => {
+                        let action = self.evaluate_expr(&args[0])?;
+                        let items = col_rc.borrow().items.clone();
+                        for item in &items {
+                            self.call_lambda(action.clone(), &[item.clone()])?;
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "toarray" => {
+                        return Ok(Value::Array(col_rc.borrow().items.clone()));
+                    }
+                    "lastindexof" => {
+                        let val = self.evaluate_expr(&args[0])?;
+                        let idx = col_rc.borrow().items.iter().rposition(|v| {
+                            crate::evaluator::values_equal(v, &val)
+                        }).map(|i| i as i32).unwrap_or(-1);
+                        return Ok(Value::Integer(idx));
                     }
                     _ => {} // Fall through to other handlers
                  }
@@ -2689,6 +3335,25 @@ impl Interpreter {
                     "count" => {
                         return Ok(Value::Integer(d.borrow().count()));
                     }
+                    "trygetvalue" => {
+                        let key = self.evaluate_expr(&args[0])?;
+                        match d.borrow().item(&key) {
+                            Ok(val) => {
+                                // In VB.NET TryGetValue sets the ByRef param, but here
+                                // we return the value. The boolean success is the wrapper.
+                                // For simplicity: store value in the ByRef variable if it's a Variable expression
+                                if args.len() >= 2 {
+                                    if let Expression::Variable(var_name) = &args[1] {
+                                        self.env.set(var_name.as_str(), val.clone()).ok();
+                                    }
+                                }
+                                return Ok(Value::Boolean(true));
+                            }
+                            Err(_) => {
+                                return Ok(Value::Boolean(false));
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2810,9 +3475,11 @@ impl Interpreter {
         // Try dispatching as a builtin qualified function call (e.g., Console.WriteLine)
         let qualified_call_name = format!("{}.{}", object_name.to_lowercase(), method_name);
         match qualified_call_name.as_str() {
-            "debug.print" => {
+            "debug.print" | "console.writeline" | "console.write" => {
                 let msg = arg_values.iter().map(|v| v.as_string()).collect::<Vec<_>>().join(" ");
-                self.side_effects.push_back(crate::RuntimeSideEffect::MsgBox(format!("[Debug] {}", msg)));
+                let with_newline = qualified_call_name.ends_with("writeline");
+                let final_msg = if with_newline { format!("{}\n", msg) } else { msg };
+                self.side_effects.push_back(crate::RuntimeSideEffect::ConsoleOutput(final_msg));
                 return Ok(Value::Nothing);
             }
 
@@ -2845,6 +3512,174 @@ impl Interpreter {
                     .map(|a| Value::String(a.clone()))
                     .collect();
                 return Ok(Value::Array(args_array));
+            }
+            "environment.currentdirectory" | "environment.getcurrentdirectory" => {
+                let cwd = std::env::current_dir().unwrap_or_default().to_string_lossy().to_string();
+                return Ok(Value::String(cwd));
+            }
+            "environment.machinename" => {
+                let name = std::process::Command::new("hostname").output()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .unwrap_or_else(|_| "localhost".to_string());
+                return Ok(Value::String(name));
+            }
+            "environment.username" => {
+                let name = std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_else(|_| "unknown".to_string());
+                return Ok(Value::String(name));
+            }
+            "environment.osversion" => {
+                return Ok(Value::String(format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)));
+            }
+            "environment.processorcount" => {
+                // Use available_parallelism or fallback to 1
+                let count = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(1);
+                return Ok(Value::Integer(count));
+            }
+            "environment.getenvironmentvariable" => {
+                let key = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                match std::env::var(&key) {
+                    Ok(val) => return Ok(Value::String(val)),
+                    Err(_) => return Ok(Value::Nothing),
+                }
+            }
+            "environment.setenvironmentvariable" => {
+                let key = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                let val = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                std::env::set_var(&key, &val);
+                return Ok(Value::Nothing);
+            }
+            "environment.getfolderpath" => {
+                // Common SpecialFolder values: Desktop=0, MyDocuments=5, AppData=26, LocalAppData=28, Temp
+                let folder_id = arg_values.get(0).map(|v| v.as_integer().unwrap_or(0)).unwrap_or(0);
+                let path = match folder_id {
+                    0 => dirs_fallback("DESKTOP", "Desktop"),       // Desktop
+                    5 | 16 => dirs_fallback("HOME", "Documents"),   // MyDocuments / Personal
+                    26 => std::env::var("APPDATA").unwrap_or_else(|_| {     // ApplicationData
+                        let home = std::env::var("HOME").unwrap_or_default();
+                        format!("{}/.config", home)
+                    }),
+                    28 => std::env::var("LOCALAPPDATA").unwrap_or_else(|_| { // LocalApplicationData
+                        let home = std::env::var("HOME").unwrap_or_default();
+                        format!("{}/.local/share", home)
+                    }),
+                    _ => std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+                };
+                return Ok(Value::String(path));
+            }
+            "environment.tickcount" | "environment.tickcount64" => {
+                let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default().as_millis() as i64;
+                return Ok(Value::Long(ms));
+            }
+            "environment.exit" => {
+                let code = arg_values.get(0).map(|v| v.as_integer().unwrap_or(0)).unwrap_or(0);
+                std::process::exit(code);
+            }
+            "environment.newline" => {
+                if cfg!(target_os = "windows") {
+                    return Ok(Value::String("\r\n".to_string()));
+                } else {
+                    return Ok(Value::String("\n".to_string()));
+                }
+            }
+            "environment.is64bitoperatingsystem" | "environment.is64bitprocess" => {
+                return Ok(Value::Boolean(cfg!(target_pointer_width = "64")));
+            }
+            "environment.version" => {
+                return Ok(Value::String("4.0.0".to_string())); // simulate .NET 4
+            }
+
+            // ---- Guid class ----
+            "guid.newguid" | "system.guid.newguid" => {
+                // Generate a UUID v4 using timestamp + counter
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                let nanos = now.as_nanos();
+                let a = ((nanos >> 96) as u32) ^ (nanos as u32);
+                let b = ((nanos >> 64) as u16) ^ ((nanos >> 16) as u16);
+                let c = (((nanos >> 48) as u16) & 0x0FFF) | 0x4000; // version 4
+                let d = (((nanos >> 32) as u8) & 0x3F) | 0x80; // variant
+                let e = (nanos >> 24) as u8;
+                let rest = nanos as u64;
+                let guid_str = format!("{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:012x}",
+                    a, b, c, d, e, rest & 0xFFFFFFFFFFFF);
+                let mut fields = std::collections::HashMap::new();
+                fields.insert("__type".to_string(), Value::String("Guid".to_string()));
+                fields.insert("__value".to_string(), Value::String(guid_str.clone()));
+                let obj = crate::value::ObjectData { class_name: "Guid".to_string(), fields };
+                return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+            }
+            "guid.parse" | "system.guid.parse" => {
+                let s = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                let mut fields = std::collections::HashMap::new();
+                fields.insert("__type".to_string(), Value::String("Guid".to_string()));
+                fields.insert("__value".to_string(), Value::String(s));
+                let obj = crate::value::ObjectData { class_name: "Guid".to_string(), fields };
+                return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+            }
+            "guid.empty" | "system.guid.empty" => {
+                let mut fields = std::collections::HashMap::new();
+                fields.insert("__type".to_string(), Value::String("Guid".to_string()));
+                fields.insert("__value".to_string(), Value::String("00000000-0000-0000-0000-000000000000".to_string()));
+                let obj = crate::value::ObjectData { class_name: "Guid".to_string(), fields };
+                return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+            }
+
+            // ---- Convert Base64 ----
+            "convert.tobase64string" => {
+                use std::io::Write;
+                let input = &arg_values[0];
+                let bytes: Vec<u8> = match input {
+                    Value::Array(arr) => arr.iter().map(|v| match v {
+                        Value::Byte(b) => *b,
+                        Value::Integer(i) => *i as u8,
+                        _ => 0u8,
+                    }).collect(),
+                    Value::String(s) => s.as_bytes().to_vec(),
+                    _ => vec![],
+                };
+                // Manual base64 encode
+                let encoded = base64_encode(&bytes);
+                return Ok(Value::String(encoded));
+            }
+            "convert.frombase64string" => {
+                let s = arg_values[0].as_string();
+                match base64_decode(&s) {
+                    Ok(bytes) => {
+                        // Return as string (common usage) — VB.NET returns Byte() but
+                        // most callers immediately convert to string
+                        let decoded = String::from_utf8(bytes.clone()).unwrap_or_else(|_| {
+                            // If not valid UTF-8, return byte array
+                            return bytes.iter().map(|b| *b as char).collect();
+                        });
+                        return Ok(Value::String(decoded));
+                    }
+                    Err(e) => return Err(RuntimeError::Custom(format!("Convert.FromBase64String: {}", e))),
+                }
+            }
+
+            // ---- Stopwatch.StartNew (factory) ----
+            "stopwatch.startnew" | "system.diagnostics.stopwatch.startnew" => {
+                let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                let mut fields = std::collections::HashMap::new();
+                fields.insert("__type".to_string(), Value::String("Stopwatch".to_string()));
+                fields.insert("isrunning".to_string(), Value::Boolean(true));
+                fields.insert("elapsedmilliseconds".to_string(), Value::Long(0));
+                fields.insert("__start_ms".to_string(), Value::Long(now_ms));
+                fields.insert("__accumulated_ms".to_string(), Value::Long(0));
+                let obj = crate::value::ObjectData { class_name: "Stopwatch".to_string(), fields };
+                return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+            }
+
+            // ---- Console.ReadKey ----
+            "console.readkey" => {
+                // In GUI/CLI context, return a ConsoleKeyInfo-like object
+                let mut fields = std::collections::HashMap::new();
+                fields.insert("keychar".to_string(), Value::String(" ".to_string()));
+                fields.insert("key".to_string(), Value::Integer(32)); // Spacebar
+                let obj = crate::value::ObjectData { class_name: "ConsoleKeyInfo".to_string(), fields };
+                return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
             }
 
             // ---- WebRequest.Create ----
@@ -3095,7 +3930,18 @@ impl Interpreter {
                 return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj_data))));
             }
 
-            _ => {}
+            _ => {
+                // Prefix-based dispatch for static class calls (Path.*, Math.*, File.*, Console.*)
+                if qualified_call_name.starts_with("path.") || qualified_call_name.starts_with("system.io.path.") {
+                    return self.dispatch_path_method(&method_name, &arg_values);
+                } else if qualified_call_name.starts_with("math.") || qualified_call_name.starts_with("system.math.") {
+                    return self.dispatch_math_method(&method_name, &arg_values);
+                } else if qualified_call_name.starts_with("file.") || qualified_call_name.starts_with("system.io.file.") {
+                    return self.dispatch_file_method(&method_name, &arg_values);
+                } else if qualified_call_name.starts_with("directory.") || qualified_call_name.starts_with("system.io.directory.") {
+                    return self.dispatch_file_method(&method_name, &arg_values);
+                }
+            }
         }
 
         // Handle form methods
@@ -3544,11 +4390,52 @@ impl Interpreter {
             }
             "getextension" => {
                  let path = args.get(0).ok_or(RuntimeError::Custom("Missing path argument".to_string()))?.as_string();
-                 Ok(Value::String(std::path::Path::new(&path).extension().unwrap_or_default().to_string_lossy().to_string()))
+                 let ext = std::path::Path::new(&path).extension().unwrap_or_default().to_string_lossy().to_string();
+                 if ext.is_empty() { Ok(Value::String(String::new())) }
+                 else { Ok(Value::String(format!(".{}", ext))) }
             }
             "getdirectoryname" => {
                  let path = args.get(0).ok_or(RuntimeError::Custom("Missing path argument".to_string()))?.as_string();
                  Ok(Value::String(std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("")).to_string_lossy().to_string()))
+            }
+            "getfilenamewithoutextension" => {
+                 let path = args.get(0).ok_or(RuntimeError::Custom("Missing path argument".to_string()))?.as_string();
+                 Ok(Value::String(std::path::Path::new(&path).file_stem().unwrap_or_default().to_string_lossy().to_string()))
+            }
+            "getfullpath" => {
+                 let path = args.get(0).ok_or(RuntimeError::Custom("Missing path argument".to_string()))?.as_string();
+                 let full = std::fs::canonicalize(&path)
+                     .unwrap_or_else(|_| std::path::PathBuf::from(&path));
+                 Ok(Value::String(full.to_string_lossy().to_string()))
+            }
+            "gettemppath" => {
+                 Ok(Value::String(std::env::temp_dir().to_string_lossy().to_string()))
+            }
+            "gettempfilename" => {
+                 let tmp = std::env::temp_dir();
+                 let name = format!("tmp{:x}.tmp", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos());
+                 let path = tmp.join(name);
+                 // Create the file like .NET does
+                 std::fs::write(&path, "").ok();
+                 Ok(Value::String(path.to_string_lossy().to_string()))
+            }
+            "hasextension" => {
+                 let path = args.get(0).ok_or(RuntimeError::Custom("Missing path argument".to_string()))?.as_string();
+                 Ok(Value::Boolean(std::path::Path::new(&path).extension().is_some()))
+            }
+            "ispathrooted" => {
+                 let path = args.get(0).ok_or(RuntimeError::Custom("Missing path argument".to_string()))?.as_string();
+                 Ok(Value::Boolean(std::path::Path::new(&path).is_absolute()))
+            }
+            "changeextension" => {
+                 let path = args.get(0).ok_or(RuntimeError::Custom("Missing path argument".to_string()))?.as_string();
+                 let ext = args.get(1).ok_or(RuntimeError::Custom("Missing extension argument".to_string()))?.as_string();
+                 let mut p = std::path::PathBuf::from(&path);
+                 p.set_extension(ext.trim_start_matches('.'));
+                 Ok(Value::String(p.to_string_lossy().to_string()))
+            }
+            "directoryseparatorchar" => {
+                 Ok(Value::String(std::path::MAIN_SEPARATOR.to_string()))
             }
             _ => Err(RuntimeError::UndefinedFunction(format!("System.IO.Path.{}", method_name)))
         }
@@ -3589,13 +4476,58 @@ impl Interpreter {
             "ceiling" => crate::builtins::math_fns::ceiling_fn(args),
             "pow" => crate::builtins::math_fns::pow_fn(args),
             "exp" => crate::builtins::math_fns::exp_fn(args),
-            "log" => crate::builtins::math_fns::log_fn(args),
+            "log" => {
+                if args.len() >= 2 {
+                    // Math.Log(value, base)
+                    let val = args[0].as_double()?;
+                    let base = args[1].as_double()?;
+                    Ok(Value::Double(val.log(base)))
+                } else {
+                    crate::builtins::math_fns::log_fn(args)
+                }
+            }
+            "log10" => {
+                let val = args.get(0).ok_or(RuntimeError::Custom("Math.Log10 requires an argument".to_string()))?.as_double()?;
+                Ok(Value::Double(val.log10()))
+            }
+            "log2" => {
+                let val = args.get(0).ok_or(RuntimeError::Custom("Math.Log2 requires an argument".to_string()))?.as_double()?;
+                Ok(Value::Double(val.log2()))
+            }
             "sin" => crate::builtins::math_fns::sin_fn(args),
             "cos" => crate::builtins::math_fns::cos_fn(args),
             "tan" => crate::builtins::math_fns::tan_fn(args),
-            "asin" | "atan" | "atn" => crate::builtins::math_fns::atn_fn(args),
+            "asin" => {
+                let val = args.get(0).ok_or(RuntimeError::Custom("Math.Asin requires an argument".to_string()))?.as_double()?;
+                Ok(Value::Double(val.asin()))
+            }
+            "acos" => {
+                let val = args.get(0).ok_or(RuntimeError::Custom("Math.Acos requires an argument".to_string()))?.as_double()?;
+                Ok(Value::Double(val.acos()))
+            }
+            "atan" | "atn" => crate::builtins::math_fns::atn_fn(args),
             "atan2" => crate::builtins::math_fns::atan2_fn(args),
             "sign" | "sgn" => crate::builtins::math_fns::sgn_fn(args),
+            "sinh" => {
+                let val = args.get(0).ok_or(RuntimeError::Custom("Math.Sinh requires an argument".to_string()))?.as_double()?;
+                Ok(Value::Double(val.sinh()))
+            }
+            "cosh" => {
+                let val = args.get(0).ok_or(RuntimeError::Custom("Math.Cosh requires an argument".to_string()))?.as_double()?;
+                Ok(Value::Double(val.cosh()))
+            }
+            "tanh" => {
+                let val = args.get(0).ok_or(RuntimeError::Custom("Math.Tanh requires an argument".to_string()))?.as_double()?;
+                Ok(Value::Double(val.tanh()))
+            }
+            "clamp" => {
+                let val = args.get(0).ok_or(RuntimeError::Custom("Math.Clamp requires 3 arguments".to_string()))?.as_double()?;
+                let min = args.get(1).ok_or(RuntimeError::Custom("Math.Clamp requires 3 arguments".to_string()))?.as_double()?;
+                let max = args.get(2).ok_or(RuntimeError::Custom("Math.Clamp requires 3 arguments".to_string()))?.as_double()?;
+                Ok(Value::Double(val.clamp(min, max)))
+            }
+            "pi" => Ok(Value::Double(std::f64::consts::PI)),
+            "e" => Ok(Value::Double(std::f64::consts::E)),
             _ => Err(RuntimeError::UndefinedFunction(format!("System.Math.{}", method_name)))
         }
 
@@ -3655,4 +4587,56 @@ fn default_value_for_type(_name: &str, var_type: &Option<irys_parser::VBType>) -
         Some(irys_parser::VBType::Variant) => Value::Nothing,
         _ => Value::Nothing,
     }
+}
+
+// Helper: get a folder path with env var fallback
+fn dirs_fallback(env_var: &str, subdir: &str) -> String {
+    std::env::var(env_var).unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/{}", home, subdir)
+    })
+}
+
+// Base64 encode without external crate
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
+// Base64 decode without external crate
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = Vec::new();
+    let s: Vec<u8> = input.bytes().filter(|b| *b != b'\n' && *b != b'\r' && *b != b' ').collect();
+    if s.len() % 4 != 0 { return Err("Invalid base64 length".to_string()); }
+    for chunk in s.chunks(4) {
+        let vals: Vec<u32> = chunk.iter().map(|&c| {
+            if c == b'=' { 0 }
+            else { CHARS.iter().position(|&x| x == c).unwrap_or(0) as u32 }
+        }).collect();
+        let triple = (vals[0] << 18) | (vals[1] << 12) | (vals[2] << 6) | vals[3];
+        result.push((triple >> 16) as u8);
+        if chunk[2] != b'=' { result.push((triple >> 8) as u8); }
+        if chunk[3] != b'=' { result.push(triple as u8); }
+    }
+    Ok(result)
 }

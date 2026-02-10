@@ -90,6 +90,7 @@ fn parse_dim_statement(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
     let mut array_bounds = None;
     let mut initializer = None;
     let mut is_new = false;
+    let mut ctor_args: Vec<Expression> = Vec::new();
 
     for p in inner {
         match p.as_rule() {
@@ -109,6 +110,14 @@ fn parse_dim_statement(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
             Rule::type_name => {
                 var_type = Some(VBType::from_str(p.as_str()));
             }
+            Rule::argument_list => {
+                // Constructor arguments for "As New Type(args)"
+                for arg_pair in p.into_inner() {
+                    if arg_pair.as_rule() == Rule::expression {
+                        ctor_args.push(parse_expression(arg_pair)?);
+                    }
+                }
+            }
             Rule::array_literal => {
                 initializer = Some(parse_array_literal(p)?);
             }
@@ -122,15 +131,7 @@ fn parse_dim_statement(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
     // Handle "As New Type" syntax
     if is_new && initializer.is_none() {
         if let Some(t) = &var_type {
-            // Implicitly create initializer: = New Type
-            // We need a way to represent "New Type" expression.
-            // Check Expression enum in AST.
-            // expression::Expression::New(String) exists?
-            // Let's assume we can construct it or use Expression::Call if needed.
-            // Grammar has new_expression = { "New" ~ identifier }.
-            // parse_expression handles Rule::new_expression -> Expression::New(name)
-            // So we can construct Expression::New(type_name_string).
-            initializer = Some(Expression::New(Identifier::new(t.to_string()), vec![]));
+            initializer = Some(Expression::New(Identifier::new(t.to_string()), ctor_args));
         }
     }
 
@@ -563,7 +564,7 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
             let mut value_expr = None;
             for p in inner {
                 match p.as_rule() {
-                    Rule::identifier => members.push(Identifier::new(p.as_str())),
+                    Rule::identifier | Rule::member_identifier => members.push(Identifier::new(p.as_str())),
                     Rule::expression => value_expr = Some(parse_expression(p)?),
                     _ => {}
                 }
@@ -591,7 +592,7 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
             let mut value_expr = None;
             for p in inner {
                 match p.as_rule() {
-                    Rule::identifier => members.push(Identifier::new(p.as_str())),
+                    Rule::identifier | Rule::member_identifier => members.push(Identifier::new(p.as_str())),
                     Rule::expression => value_expr = Some(parse_expression(p)?),
                     _ => {}
                 }
@@ -832,7 +833,13 @@ fn parse_block(pair: Pair<Rule>) -> ParseResult<Vec<Statement>> {
 fn parse_for_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
     let mut inner = pair.into_inner();
     let variable = Identifier::new(inner.next().unwrap().as_str());
-    let start = parse_expression(inner.next().unwrap())?;
+
+    // Skip optional 'As type_name'
+    let mut next = inner.next().unwrap();
+    if next.as_rule() == Rule::type_name {
+        next = inner.next().unwrap();
+    }
+    let start = parse_expression(next)?;
     let end = parse_expression(inner.next().unwrap())?;
 
     let mut step = None;
@@ -947,6 +954,9 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
         Rule::unary => {
             parse_unary_expression(pair)
         }
+        Rule::postfix => {
+            parse_postfix_expression(pair)
+        }
         Rule::call_expression => {
             let mut inner = pair.into_inner();
             let name = Identifier::new(inner.next().unwrap().as_str());
@@ -958,35 +968,17 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
             Ok(Expression::Call(name, arguments))
         }
         Rule::member_call => {
-            let inner = pair.into_inner();
-            let parts: Vec<_> = inner.collect();
+            let mut inner = pair.into_inner();
+            // First child is always the root identifier
+            let first = inner.next().unwrap();
+            let mut expr = Expression::Variable(Identifier::new(first.as_str()));
 
-            // Separate identifiers from optional argument_list
-            let mut identifiers = vec![];
-            let mut arguments = vec![];
-
-            for p in parts {
-                if p.as_rule() == Rule::identifier {
-                    identifiers.push(p.as_str());
-                } else if p.as_rule() == Rule::argument_list {
-                    arguments = parse_argument_list(p)?;
-                }
+            // Remaining children are member_chain segments
+            for chain in inner {
+                expr = parse_member_chain_node(chain, expr)?;
             }
 
-            if identifiers.len() < 2 {
-                return Err(ParseError::Custom("member_call needs at least 2 identifiers".to_string()));
-            }
-
-            // Last identifier is the method name
-            let method_name = Identifier::new(identifiers[identifiers.len() - 1]);
-
-            // Build object expression from all identifiers except the last
-            let mut expr = Expression::Variable(Identifier::new(identifiers[0]));
-            for i in 1..identifiers.len() - 1 {
-                expr = Expression::MemberAccess(Box::new(expr), Identifier::new(identifiers[i]));
-            }
-
-            Ok(Expression::MethodCall(Box::new(expr), method_name, arguments))
+            Ok(expr)
         }
         Rule::member_access => {
             let mut inner = pair.into_inner();
@@ -1021,6 +1013,12 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
         Rule::array_literal => {
             parse_array_literal(pair)
         }
+        Rule::date_literal => {
+            let s = pair.as_str();
+            // Strip the surrounding # delimiters
+            let inner = s[1..s.len()-1].trim().to_string();
+            Ok(Expression::DateLiteral(inner))
+        }
         Rule::nothing_literal => Ok(Expression::Nothing),
         Rule::new_expression => {
             let mut inner = pair.into_inner();
@@ -1041,7 +1039,7 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
             let mut arguments = Vec::new();
             for p in inner {
                 match p.as_rule() {
-                    Rule::identifier => identifiers.push(p.as_str().to_string()),
+                    Rule::identifier | Rule::member_identifier => identifiers.push(p.as_str().to_string()),
                     Rule::argument_list => arguments = parse_argument_list(p)?,
                     _ => {}
                 }
@@ -1061,7 +1059,7 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
             let inner = pair.into_inner();
             let mut expr = Expression::WithTarget;
             for p in inner {
-                if p.as_rule() == Rule::identifier {
+                if p.as_rule() == Rule::identifier || p.as_rule() == Rule::member_identifier {
                     expr = Expression::MemberAccess(Box::new(expr), Identifier::new(p.as_str()));
                 }
             }
@@ -1072,7 +1070,7 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
             let _me = inner.next().unwrap(); // me_keyword
             let mut expr = Expression::Me;
             for p in inner {
-                if p.as_rule() == Rule::identifier {
+                if p.as_rule() == Rule::identifier || p.as_rule() == Rule::member_identifier {
                     expr = Expression::MemberAccess(Box::new(expr), Identifier::new(p.as_str()));
                 }
             }
@@ -1085,7 +1083,7 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
             for p in inner {
                 match p.as_rule() {
                     Rule::me_keyword => {},
-                    Rule::identifier => identifiers.push(p.as_str().to_string()),
+                    Rule::identifier | Rule::member_identifier => identifiers.push(p.as_str().to_string()),
                     Rule::argument_list => arguments = parse_argument_list(p)?,
                     _ => {}
                 }
@@ -1170,10 +1168,50 @@ fn parse_unary_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
             let operand = parse_expression(inner.next().unwrap())?;
             Ok(Expression::Await(Box::new(operand)))
         }
+        Rule::postfix => {
+            parse_postfix_expression(first)
+        }
         _ => {
-            // No operator, must be primary
+            // Fallback: treat as primary
             parse_expression(first)
         }
+    }
+}
+
+fn parse_postfix_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
+    let mut inner = pair.into_inner();
+    let primary = inner.next().unwrap();
+    let mut expr = parse_expression(primary)?;
+
+    // Apply member_chain postfix operations
+    for chain in inner {
+        expr = parse_member_chain_node(chain, expr)?;
+    }
+
+    Ok(expr)
+}
+
+fn parse_member_chain_node(chain: Pair<Rule>, mut expr: Expression) -> ParseResult<Expression> {
+    match chain.as_rule() {
+        Rule::member_chain_call => {
+            let mut chain_inner = chain.into_inner();
+            let name = chain_inner.next().unwrap().as_str();
+            let arguments = if let Some(arg_list) = chain_inner.next() {
+                parse_argument_list(arg_list)?
+            } else {
+                vec![]
+            };
+            Ok(Expression::MethodCall(Box::new(expr), Identifier::new(name), arguments))
+        }
+        Rule::member_chain_access => {
+            let name = chain.into_inner().next().unwrap().as_str();
+            Ok(Expression::MemberAccess(Box::new(expr), Identifier::new(name)))
+        }
+        Rule::member_chain => {
+            let inner_chain = chain.into_inner().next().unwrap();
+            parse_member_chain_node(inner_chain, expr)
+        }
+        _ => Ok(expr),
     }
 }
 
@@ -1467,6 +1505,7 @@ fn parse_field_decl(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
     let mut field_init = None;
     let mut field_bounds = None;
     let mut is_new = false;
+    let mut ctor_args: Vec<Expression> = Vec::new();
     
     for fp in pair.into_inner() {
         match fp.as_rule() {
@@ -1481,6 +1520,13 @@ fn parse_field_decl(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
                     .collect::<Result<_, _>>()?;
                 field_bounds = Some(bounds);
             }
+            Rule::argument_list => {
+                for arg_pair in fp.into_inner() {
+                    if arg_pair.as_rule() == Rule::expression {
+                        ctor_args.push(parse_expression(arg_pair)?);
+                    }
+                }
+            }
             Rule::expression => field_init = Some(parse_expression(fp)?),
             Rule::array_literal => field_init = Some(parse_expression(fp)?),
             _ => {}
@@ -1490,7 +1536,7 @@ fn parse_field_decl(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
     // Handle "As New Type" syntax
     if is_new && field_init.is_none() {
         if let Some(t) = &field_type {
-            field_init = Some(Expression::New(Identifier::new(t.to_string()), vec![]));
+            field_init = Some(Expression::New(Identifier::new(t.to_string()), ctor_args));
         }
     }
     

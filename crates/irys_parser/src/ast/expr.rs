@@ -8,6 +8,7 @@ pub enum Expression {
     DoubleLiteral(f64),
     StringLiteral(String),
     BooleanLiteral(bool),
+    DateLiteral(String),
     ArrayLiteral(Vec<Expression>),
     Nothing,
 
