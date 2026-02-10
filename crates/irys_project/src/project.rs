@@ -2,6 +2,17 @@ use irys_forms::Form;
 use serde::{Deserialize, Serialize};
 use crate::resources::ResourceManager;
 
+/// Specifies what the project starts with
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum StartupObject {
+    /// Start with a form
+    Form(String),
+    /// Start with Sub Main in a module
+    SubMain,
+    /// No startup object specified
+    None,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeFile {
     pub name: String,
@@ -104,6 +115,10 @@ impl FormModule {
 #[derive(Debug, Clone, Serialize)]
 pub struct Project {
     pub name: String,
+    #[serde(default)]
+    pub startup_object: StartupObject,
+    /// Deprecated: use startup_object instead. Kept for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub startup_form: Option<String>,
     pub forms: Vec<FormModule>,
     pub code_files: Vec<CodeFile>,
@@ -111,10 +126,17 @@ pub struct Project {
     pub resources: ResourceManager,
 }
 
+impl Default for StartupObject {
+    fn default() -> Self {
+        StartupObject::None
+    }
+}
+
 impl Project {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            startup_object: StartupObject::None,
             startup_form: None,
             forms: Vec::new(),
             code_files: Vec::new(),
@@ -123,7 +145,8 @@ impl Project {
     }
 
     pub fn add_form(&mut self, form: Form) {
-        if self.startup_form.is_none() {
+        if matches!(self.startup_object, StartupObject::None) {
+            self.startup_object = StartupObject::Form(form.name.clone());
             self.startup_form = Some(form.name.clone());
         }
         self.forms.push(FormModule::new(form));
@@ -150,7 +173,24 @@ impl Project {
     }
 
     pub fn get_startup_form(&self) -> Option<&FormModule> {
-        self.startup_form.as_ref().and_then(|name| self.get_form(name))
+        // Try new startup_object first, then fall back to deprecated startup_form
+        match &self.startup_object {
+            StartupObject::Form(name) => self.get_form(name),
+            _ => self.startup_form.as_ref().and_then(|name| self.get_form(name)),
+        }
+    }
+
+    /// Returns the name of the startup form, if the startup object is a form
+    pub fn get_startup_form_name(&self) -> Option<&str> {
+        match &self.startup_object {
+            StartupObject::Form(name) => Some(name.as_str()),
+            _ => self.startup_form.as_deref(),
+        }
+    }
+
+    /// Returns true if the project starts with Sub Main
+    pub fn starts_with_main(&self) -> bool {
+        matches!(self.startup_object, StartupObject::SubMain)
     }
 }
 
@@ -164,6 +204,9 @@ impl<'de> Deserialize<'de> for Project {
         #[derive(Deserialize)]
         struct ProjectHelper {
             name: String,
+            #[serde(default)]
+            startup_object: Option<StartupObject>,
+            #[serde(default)]
             startup_form: Option<String>,
             #[serde(default)]
             forms: Vec<FormModule>,
@@ -185,8 +228,20 @@ impl<'de> Deserialize<'de> for Project {
             code_files.extend(helper.classes);
         }
 
+        // Migrate old startup_form to new startup_object
+        let startup_object = if let Some(so) = helper.startup_object {
+            // New format: use the startup_object directly
+            so
+        } else if let Some(ref form_name) = helper.startup_form {
+            // Old format: convert startup_form to startup_object
+            StartupObject::Form(form_name.clone())
+        } else {
+            StartupObject::None
+        };
+
         Ok(Project {
             name: helper.name,
+            startup_object,
             startup_form: helper.startup_form,
             forms: helper.forms,
             code_files,

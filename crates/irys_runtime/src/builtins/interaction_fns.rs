@@ -1,5 +1,8 @@
 use crate::value::{RuntimeError, Value};
 use std::process::Command;
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 /// Beep() - Makes a beep sound
 pub fn beep_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
@@ -123,4 +126,118 @@ pub fn appactivate_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     // AppActivate is platform-specific and requires window management APIs
     // Real implementation would use platform-specific code
     Ok(Value::Nothing)
+}
+
+/// Load form_object - Loads a form into memory (creates instance)
+pub fn load_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("Load requires exactly one argument".to_string()));
+    }
+    
+    // In a full implementation, this would:
+    // 1. Create a new form instance
+    // 2. Initialize form controls
+    // 3. Trigger Form_Load event
+    // For now, just return Nothing
+    Ok(Value::Nothing)
+}
+
+/// Unload form_object - Unloads a form from memory (destroys instance)
+pub fn unload_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("Unload requires exactly one argument".to_string()));
+    }
+    
+    // In a full implementation, this would:
+    // 1. Trigger Form_Unload event
+    // 2. Destroy form controls
+    // 3. Release form instance
+    // For now, just return Nothing
+    Ok(Value::Nothing)
+}
+
+/// App object - Returns application-level properties
+pub fn app_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
+    use crate::ObjectData;
+    
+    let mut fields = HashMap::new();
+    fields.insert("path".to_string(), Value::String(".".to_string()));
+    fields.insert("title".to_string(), Value::String("Irys Application".to_string()));
+    fields.insert("exename".to_string(), Value::String("irys_app".to_string()));
+    fields.insert("major".to_string(), Value::Integer(1));
+    fields.insert("minor".to_string(), Value::Integer(0));
+    fields.insert("revision".to_string(), Value::Integer(0));
+    
+    let obj = ObjectData {
+        class_name: "App".to_string(),
+        fields,
+    };
+    
+    Ok(Value::Object(Rc::new(RefCell::new(obj))))
+}
+
+/// Screen object - Returns screen/display properties
+pub fn screen_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
+    use crate::ObjectData;
+    
+    let mut fields = HashMap::new();
+    // Default screen dimensions (can be platform-specific in full implementation)
+    fields.insert("width".to_string(), Value::Integer(1920));
+    fields.insert("height".to_string(), Value::Integer(1080));
+    fields.insert("twipsperpixelx".to_string(), Value::Integer(15));
+    fields.insert("twipsperpixely".to_string(), Value::Integer(15));
+    
+    let obj = ObjectData {
+        class_name: "Screen".to_string(),
+        fields,
+    };
+    
+    Ok(Value::Object(Rc::new(RefCell::new(obj))))
+}
+
+/// Clipboard object - Returns clipboard object with methods
+pub fn clipboard_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
+    use crate::ObjectData;
+    
+    let mut fields = HashMap::new();
+    // Clipboard data stored as string (simplified)
+    fields.insert("text".to_string(), Value::String(String::new()));
+    
+    let obj = ObjectData {
+        class_name: "Clipboard".to_string(),
+        fields,
+    };
+    
+    Ok(Value::Object(Rc::new(RefCell::new(obj))))
+}
+
+/// Clipboard.GetText() - Get text from clipboard
+pub fn clipboard_gettext_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
+    // In a full implementation, this would read from system clipboard
+    // For now, return empty string
+    Ok(Value::String(String::new()))
+}
+
+/// Clipboard.SetText(text) - Set text to clipboard
+pub fn clipboard_settext_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("Clipboard.SetText requires 1 argument".to_string()));
+    }
+    // In a full implementation, this would write to system clipboard
+    // For now, just return Nothing
+    Ok(Value::Nothing)
+}
+
+/// Clipboard.Clear() - Clear clipboard
+pub fn clipboard_clear_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
+    // In a full implementation, this would clear system clipboard
+    Ok(Value::Nothing)
+}
+
+/// Forms collection - Returns collection of all forms
+pub fn forms_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
+    use crate::collections::ArrayList;
+    // Return an empty collection for now
+    // In a full implementation, this would return all loaded forms
+    Ok(Value::Collection(Rc::new(RefCell::new(ArrayList::new()))))
 }

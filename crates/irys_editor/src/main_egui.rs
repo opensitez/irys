@@ -1336,6 +1336,20 @@ impl irysEditorApp {
             // Create Interpreter
             let mut interpreter = irys_runtime::Interpreter::new();
             
+            // Load all code modules first
+            for code_file in &project.code_files {
+                match irys_parser::parse_program(&code_file.code) {
+                    Ok(program) => {
+                        if let Err(e) = interpreter.load_module(&code_file.name, &program) {
+                            eprintln!("Runtime Error loading module {}: {}", code_file.name, e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Parse error in module {}: {}", code_file.name, e);
+                    }
+                }
+            }
+            
             // Parse all forms code
             for form_module in &project.forms {
                 let code_to_run = if form_module.code.trim().is_empty() {
@@ -1473,10 +1487,24 @@ impl irysEditorApp {
                 }
             }
             
+            // Check if we should run Sub Main or show a form
+            let should_call_main = matches!(project.startup_object, irys_project::StartupObject::SubMain);
+            
+            if should_call_main {
+                // Call Sub Main if it exists
+                println!("=== Calling Sub Main ===");
+                if let Err(e) = interpreter.call_procedure("main", &[]) {
+                    eprintln!("Runtime Error calling Main: {}", e);
+                }
+                // Sub Main projects typically don't show a form initially
+                self.runtime_active_form = None;
+            } else {
+                // Set initial active form to startup form or first form
+                self.runtime_active_form = project.get_startup_form_name().map(|s| s.to_string())
+                    .or_else(|| project.forms.first().map(|f| f.form.name.clone()));
+            }
+            
             self.interpreter = Some(interpreter);
-            // Set initial active form to startup form or first form
-            self.runtime_active_form = project.startup_form.clone()
-                .or_else(|| project.forms.first().map(|f| f.form.name.clone()));
             self.run_mode = true;
             println!("Runtime Mode Active");
         }
@@ -1501,20 +1529,52 @@ impl irysEditorApp {
 
                         ui.horizontal(|ui| {
                             ui.label("Startup Object:");
-                            let mut selected = project.startup_form.clone().unwrap_or_default();
+                            
+                            // Display current selection based on enum
+                            let current_display = match &project.startup_object {
+                                irys_project::StartupObject::SubMain => "Sub Main",
+                                irys_project::StartupObject::Form(name) => name.as_str(),
+                                irys_project::StartupObject::None => "(None)",
+                            };
+                            
                             egui::ComboBox::from_id_source("startup_obj")
-                                .selected_text(if selected.is_empty() { "(None)" } else { &selected })
+                                .selected_text(current_display)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut selected, "".to_string(), "(None)");
+                                    eprintln!("[DEBUG] Rendering startup object dropdown, project.forms.len()={}", project.forms.len());
+                                    eprintln!("[DEBUG] Current startup_object={:?}", project.startup_object);
+                                    
+                                    // Sub Main option
+                                    if ui.selectable_label(
+                                        matches!(project.startup_object, irys_project::StartupObject::SubMain),
+                                        "Sub Main"
+                                    ).clicked() {
+                                        project.startup_object = irys_project::StartupObject::SubMain;
+                                        project.startup_form = None;
+                                    }
+                                    
+                                    ui.separator();
+                                    
+                                    // Form options
                                     for form_mod in &project.forms {
-                                        ui.selectable_value(&mut selected, form_mod.form.name.clone(), &form_mod.form.name);
+                                        let is_selected = matches!(&project.startup_object, 
+                                            irys_project::StartupObject::Form(name) if name == &form_mod.form.name);
+                                        if ui.selectable_label(is_selected, &form_mod.form.name).clicked() {
+                                            project.startup_object = irys_project::StartupObject::Form(form_mod.form.name.clone());
+                                            project.startup_form = Some(form_mod.form.name.clone());
+                                        }
+                                    }
+                                    
+                                    ui.separator();
+                                    
+                                    // None option
+                                    if ui.selectable_label(
+                                        matches!(project.startup_object, irys_project::StartupObject::None),
+                                        "(None)"
+                                    ).clicked() {
+                                        project.startup_object = irys_project::StartupObject::None;
+                                        project.startup_form = None;
                                     }
                                 });
-                            if selected.is_empty() {
-                                project.startup_form = None;
-                            } else {
-                                project.startup_form = Some(selected);
-                            }
                         });
 
                         ui.add_space(16.0);

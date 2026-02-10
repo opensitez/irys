@@ -1737,6 +1737,7 @@ impl Interpreter {
             "ubound" => return ubound_fn(&arg_values),
             "lbound" => return lbound_fn(&arg_values),
             "array" => return array_fn(&arg_values),
+            "erase" => return erase_fn(&arg_values),
 
             // Conversion functions
             "cstr" => return cstr_fn(&arg_values),
@@ -1773,6 +1774,7 @@ impl Interpreter {
             "isarray" => return isarray_fn(&arg_values),
             "isnothing" => return isnothing_fn(&arg_values),
             "isdate" => return isdate_fn(&arg_values),
+            "isnull" => return isnull_fn(&arg_values),
             "typename" => return typename_fn(&arg_values),
             "vartype" => return vartype_fn(&arg_values),
 
@@ -1806,6 +1808,8 @@ impl Interpreter {
 
             "cdate" => return cdate_fn(&arg_values),
             "cdec" => return cdec_fn(&arg_values),
+            "ccur" => return ccur_fn(&arg_values),
+            "cvar" => return cvar_fn(&arg_values),
             "formatnumber" => return formatnumber_fn(&arg_values),
             "formatcurrency" => return formatcurrency_fn(&arg_values),
             "formatpercent" => return formatpercent_fn(&arg_values),
@@ -1874,6 +1878,8 @@ impl Interpreter {
             "lof" => return lof_fn(&arg_values),
             "loc" => return loc_fn(&arg_values),
             "fileattr" => return fileattr_fn(&arg_values),
+            "input" => return input_fn(&arg_values),
+            "inputb" => return inputb_fn(&arg_values),
             
             // Image functions
             "loadpicture" => return loadpicture_fn(&arg_values),
@@ -1886,6 +1892,12 @@ impl Interpreter {
             "command" | "command$" => return command_fn(&arg_values),
             "sendkeys" => return sendkeys_fn(&arg_values),
             "appactivate" => return appactivate_fn(&arg_values),
+            "load" => return load_fn(&arg_values),
+            "unload" => return unload_fn(&arg_values),
+            "app" => return app_fn(&arg_values),
+            "screen" => return screen_fn(&arg_values),
+            "clipboard" => return clipboard_fn(&arg_values),
+            "forms" => return forms_fn(&arg_values),
 
             // Financial functions
             "pmt" => return pmt_fn(&arg_values),

@@ -33,3 +33,14 @@ pub fn lbound_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         }),
     }
 }
+
+/// Erase array_name - Deallocates dynamic array or resets fixed-size array to default values
+pub fn erase_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("Erase requires exactly one argument".to_string()));
+    }
+    // For dynamic arrays: deallocate (return empty array)
+    // For fixed-size arrays: reset to default values
+    // In practice, we'll just return an empty array
+    Ok(Value::Array(Vec::new()))
+}

@@ -710,3 +710,39 @@ pub fn savepicture_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         Err(e) => Err(RuntimeError::Custom(format!("SavePicture error: {}", e))),
     }
 }
+
+/// Input(number, #filenumber) - Read specified number of characters from sequential file
+pub fn input_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::Custom("Input requires 2 arguments (number, filenumber)".to_string()));
+    }
+    
+    let _num_chars = args[0].as_integer()? as usize;
+    let _file_num = args[1].as_integer()?;
+    
+    // In a full implementation, this would:
+    // 1. Look up the file handle from file_num
+    // 2. Read num_chars characters from the file
+    // 3. Return as string
+    
+    // For now, return a stub string
+    Ok(Value::String("".to_string()))
+}
+
+/// InputB(number, #filenumber) - Read specified number of bytes from binary file
+pub fn inputb_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 2 {
+        return Err(RuntimeError::Custom("InputB requires 2 arguments (number, filenumber)".to_string()));
+    }
+    
+    let _num_bytes = args[0].as_integer()? as usize;
+    let _file_num = args[1].as_integer()?;
+    
+    // In a full implementation, this would:
+    // 1. Look up the file handle from file_num
+    // 2. Read num_bytes bytes from the file
+    // 3. Return as string (or byte array)
+    
+    // For now, return a stub string
+    Ok(Value::String("".to_string()))
+}

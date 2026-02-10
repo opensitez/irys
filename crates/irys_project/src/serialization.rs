@@ -96,10 +96,16 @@ pub fn save_project_vbp(project: &Project, path: impl AsRef<Path>) -> SaveResult
     }
 
     // Project Properties
-    if let Some(startup) = &project.startup_form {
-        vbp_content.push_str(&format!("Startup=\"{}\"\n", startup));
-    } else {
-        vbp_content.push_str("Startup=\"Sub Main\"\n");
+    match &project.startup_object {
+        crate::project::StartupObject::Form(form_name) => {
+            vbp_content.push_str(&format!("Startup=\"{}\"\n", form_name));
+        }
+        crate::project::StartupObject::SubMain => {
+            vbp_content.push_str("Startup=\"Sub Main\"\n");
+        }
+        crate::project::StartupObject::None => {
+            vbp_content.push_str("Startup=\"Sub Main\"\n");
+        }
     }
     
     vbp_content.push_str("Command32=\"\"\n");
@@ -435,7 +441,11 @@ pub fn load_project_vbproj(path: impl AsRef<Path>) -> SaveResult<Project> {
                         if current_tag == b"AssemblyName" {
                             project_name = txt;
                         } else if current_tag == b"StartupObject" {
-                            if txt != "Sub Main" && !txt.contains("My.MyApplication") {
+                            // Store the raw startup object text for now
+                            if txt == "Sub Main" || txt.is_empty() {
+                                // Will set to SubMain later
+                                startup_object = Some("Sub Main".to_string());
+                            } else if !txt.contains("My.MyApplication") {
                                 startup_object = Some(txt);
                             }
                         } else if current_tag == b"SubType" && in_compile {
@@ -477,7 +487,28 @@ pub fn load_project_vbproj(path: impl AsRef<Path>) -> SaveResult<Project> {
     }
 
     let mut project = Project::new(&project_name);
-    project.startup_form = startup_object;
+    
+    // Set startup object based on what was parsed
+    if let Some(ref startup_str) = startup_object {
+        eprintln!("[DEBUG] Parsed startup_object string: {:?}", startup_str);
+        if startup_str == "Sub Main" {
+            project.startup_object = crate::project::StartupObject::SubMain;
+            eprintln!("[DEBUG] Set startup_object to SubMain");
+        } else {
+            // Extract form name from "ProjectName.FormName" format
+            let form_name = if let Some(dot_pos) = startup_str.rfind('.') {
+                startup_str[dot_pos + 1..].to_string()
+            } else {
+                startup_str.clone()
+            };
+            project.startup_object = crate::project::StartupObject::Form(form_name.clone());
+            project.startup_form = Some(form_name);
+            eprintln!("[DEBUG] Set startup_object to Form");
+        }
+    } else {
+        eprintln!("[DEBUG] No startup_object string parsed, setting to None");
+        project.startup_object = crate::project::StartupObject::None;
+    }
 
     let parent_dir = path.parent().unwrap_or(Path::new("."));
 
@@ -490,14 +521,16 @@ pub fn load_project_vbproj(path: impl AsRef<Path>) -> SaveResult<Project> {
         match load_form_vb(&form_path) {
             Ok(form_module) => {
                 eprintln!("[DEBUG] Form loaded OK: '{}' with {} controls", form_module.form.name, form_module.form.controls.len());
+                let form_name = form_module.form.name.clone();
                 project.forms.push(form_module);
-                // Try to set startup form if matching name
-                if let Some(ref s) = project.startup_form {
-                    // StartUpObject might be "ProjectName.FormName" or just "FormName"
-                    let form_name = &project.forms.last().unwrap().form.name;
-                    if s.ends_with(form_name) {
-                       // normalize
-                       project.startup_form = Some(form_name.clone()); 
+                
+                // Update startup_object if it references this form
+                if let crate::project::StartupObject::Form(ref startup_name) = project.startup_object {
+                    // StartupObject might be "ProjectName.FormName" or just "FormName"
+                    if startup_name.ends_with(&form_name) {
+                        // Normalize to just the form name
+                        project.startup_object = crate::project::StartupObject::Form(form_name.clone());
+                        project.startup_form = Some(form_name);
                     }
                 }
             }
@@ -518,6 +551,9 @@ pub fn load_project_vbproj(path: impl AsRef<Path>) -> SaveResult<Project> {
              project.add_code_file(crate::project::CodeFile { name, code: content });
         }
     }
+
+    eprintln!("[DEBUG] Project startup_object after loading: {:?}", project.startup_object);
+    eprintln!("[DEBUG] Project startup_form after loading: {:?}", project.startup_form);
 
     Ok(project)
 }

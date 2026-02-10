@@ -246,9 +246,66 @@ pub fn RuntimePanel() -> Element {
     // Initialize Runtime
     use_effect(move || {
         if interpreter.read().is_none() {
-            // Get the startup form from the project, not the currently selected item
+            // Get the startup object from the project
             let project_read = state.project.read();
             if let Some(proj) = project_read.as_ref() {
+                // Check if starting with Sub Main
+                if proj.starts_with_main() {
+                    // Sub Main mode - no form to display
+                    drop(project_read);
+                    
+                    let mut interp = Interpreter::new();
+                    
+                    // Register resources
+                    let mut res_map = HashMap::new();
+                    if let Some(proj) = state.project.read().as_ref() {
+                         for item in &proj.resources.resources {
+                             res_map.insert(item.name.clone(), item.value.clone());
+                         }
+                    }
+                    interp.register_resources(res_map);
+                    
+                    // Load all code files
+                    let project_read2 = state.project.read();
+                    if let Some(proj) = project_read2.as_ref() {
+                        for code_file in &proj.code_files {
+                            if let Ok(program) = parse_program(&code_file.code) {
+                                let _ = interp.load_module(&code_file.name, &program);
+                            }
+                        }
+                        
+                        // Load all forms code too (even though not showing them)
+                        for form_module in &proj.forms {
+                            let form_code = if form_module.is_vbnet() {
+                                format!("{}\n{}", form_module.get_designer_code(), form_module.get_user_code())
+                            } else {
+                                form_module.get_user_code().to_string()
+                            };
+                            if let Ok(program) = parse_program(&form_code) {
+                                let _ = interp.load_module(&form_module.form.name, &program);
+                            }
+                        }
+                    }
+                    drop(project_read2);
+                    
+                    // Call Sub Main
+                    println!("=== Calling Sub Main ===");
+                    match interp.call_procedure(&irys_parser::ast::Identifier::new("main"), &[]) {
+                        Ok(_) => println!("Sub Main completed successfully"),
+                        Err(e) => {
+                            parse_error.set(Some(format!("Sub Main Error: {:?}", e)));
+                            println!("Sub Main Error: {:?}", e);
+                        }
+                    }
+                    
+                    // Process side effects (Console.WriteLine, etc)
+                    process_side_effects(&mut interp, state, &mut runtime_form, &mut msgbox_content);
+                    
+                    interpreter.set(Some(interp));
+                    return;
+                }
+                
+                // Form mode - existing logic
                 if let Some(startup_form_module) = proj.get_startup_form() {
                     let form = startup_form_module.form.clone();
                     // For VB.NET forms, combine designer + user code

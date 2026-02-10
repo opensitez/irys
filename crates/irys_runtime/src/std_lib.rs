@@ -60,6 +60,36 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
             Ok(Value::Double(d.round()))
         }
         
+        // Type checking functions
+        "isnull" => {
+            use crate::builtins::isnull_fn;
+            isnull_fn(args)
+        }
+        "ccur" => {
+            use crate::builtins::ccur_fn;
+            ccur_fn(args)
+        }
+        "cvar" => {
+            use crate::builtins::cvar_fn;
+            cvar_fn(args)
+        }
+        "app" => {
+            use crate::builtins::app_fn;
+            app_fn(args)
+        }
+        "screen" => {
+            use crate::builtins::screen_fn;
+            screen_fn(args)
+        }
+        "clipboard" => {
+            use crate::builtins::clipboard_fn;
+            clipboard_fn(args)
+        }
+        "forms" => {
+            use crate::builtins::forms_fn;
+            forms_fn(args)
+        }
+        
         _ => Err(RuntimeError::UndefinedFunction(name.to_string())),
     }
 }

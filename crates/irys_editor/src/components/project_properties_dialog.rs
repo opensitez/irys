@@ -83,30 +83,45 @@ pub fn ProjectPropertiesDialog() -> Element {
                         label { style: "display: block; margin-bottom: 4px; font-weight: bold;", "Startup Object:" }
                         {
                             if let Some(proj) = state.project.read().as_ref() {
-                                let current_startup = proj.startup_form.clone();
+                                let current_startup = match &proj.startup_object {
+                                    irys_project::StartupObject::SubMain => "Sub Main".to_string(),
+                                    irys_project::StartupObject::Form(name) => name.clone(),
+                                    irys_project::StartupObject::None => String::new(),
+                                };
                                 rsx! {
                                     select {
                                         style: "width: 100%; padding: 4px; border: 1px solid #ccc;",
-                                        value: "{current_startup.clone().unwrap_or_default()}",
+                                        value: "{current_startup}",
                                         onchange: move |evt| {
-                                            let selected_form = evt.value();
+                                            let selected = evt.value();
                                             if let Some(proj) = state.project.write().as_mut() {
-                                                if selected_form.is_empty() {
+                                                if selected == "Sub Main" {
+                                                    proj.startup_object = irys_project::StartupObject::SubMain;
+                                                    proj.startup_form = None;
+                                                } else if selected.is_empty() {
+                                                    proj.startup_object = irys_project::StartupObject::None;
                                                     proj.startup_form = None;
                                                 } else {
-                                                    proj.startup_form = Some(selected_form);
+                                                    proj.startup_object = irys_project::StartupObject::Form(selected.clone());
+                                                    proj.startup_form = Some(selected);
                                                 }
                                             }
                                         },
                                         option {
+                                            value: "Sub Main",
+                                            selected: matches!(proj.startup_object, irys_project::StartupObject::SubMain),
+                                            "Sub Main"
+                                        }
+                                        option {
                                             value: "",
-                                            selected: current_startup.is_none(),
+                                            selected: matches!(proj.startup_object, irys_project::StartupObject::None),
                                             "(None)"
                                         }
                                         for form_module in &proj.forms {
                                             {
                                                 let form_name = form_module.form.name.clone();
-                                                let is_selected = current_startup.as_ref() == Some(&form_name);
+                                                let is_selected = matches!(&proj.startup_object, 
+                                                    irys_project::StartupObject::Form(name) if name == &form_name);
                                                 rsx! {
                                                     option {
                                                         key: "{form_name}",
