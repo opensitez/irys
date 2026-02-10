@@ -82,7 +82,18 @@ fn run_vb_file(path: &Path, extra_args: &[String]) {
         std::process::exit(1);
     }
 
-    let _ = interp.call_procedure(&irys_parser::ast::Identifier::new("main"), &[]);
+    match interp.call_procedure(&irys_parser::ast::Identifier::new("main"), &[]) {
+        Ok(_) => {}
+        Err(irys_runtime::RuntimeError::Exit(_)) => {}
+        Err(irys_runtime::RuntimeError::Return(_)) => {}
+        Err(irys_runtime::RuntimeError::Continue(_)) => {}
+        Err(irys_runtime::RuntimeError::UndefinedFunction(_)) => {} // no Main sub found
+        Err(e) => {
+            drain_console_effects(&mut interp);
+            eprintln!("Runtime error: {:?}", e);
+            std::process::exit(1);
+        }
+    }
     drain_console_effects(&mut interp);
 }
 

@@ -1,6 +1,7 @@
 use crate::builtins::*;
 use crate::environment::Environment;
 use crate::evaluator::{evaluate, values_equal, value_in_range, compare_values};
+use crate::data_access::DataAccessManager;
 use crate::event_system::EventSystem;
 use crate::value::{ExitType, RuntimeError, Value, ObjectData};
 use std::collections::{HashMap, VecDeque};
@@ -1690,6 +1691,81 @@ impl Interpreter {
                     return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
                 }
 
+                // ===== DATA ACCESS CONSTRUCTORS =====
+                // ADODB.Connection / SqlConnection / OleDbConnection
+                if class_name == "adodb.connection" || class_name == "connection"
+                    || class_name == "sqlconnection" || class_name == "system.data.sqlclient.sqlconnection"
+                    || class_name == "oledbconnection" || class_name == "system.data.oledb.oledbconnection"
+                    || class_name == "mysqlconnection" || class_name == "mysql.data.mysqlclient.mysqlconnection"
+                    || class_name == "npgsqlconnection" || class_name == "npgsql.npgsqlconnection"
+                {
+                    let conn_str = if !ctor_args.is_empty() {
+                        self.evaluate_expr(&ctor_args[0])?.as_string()
+                    } else {
+                        String::new()
+                    };
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("DbConnection".to_string()));
+                    fields.insert("__conn_id".to_string(), Value::Long(0)); // 0 = not yet opened
+                    fields.insert("connectionstring".to_string(), Value::String(conn_str.clone()));
+                    fields.insert("state".to_string(), Value::Integer(0)); // 0=Closed, 1=Open
+                    let obj = crate::value::ObjectData { class_name: "DbConnection".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // ADODB.Command / SqlCommand / OleDbCommand
+                if class_name == "adodb.command" || class_name == "command"
+                    || class_name == "sqlcommand" || class_name == "system.data.sqlclient.sqlcommand"
+                    || class_name == "oledbcommand" || class_name == "system.data.oledb.oledbcommand"
+                    || class_name == "mysqlcommand" || class_name == "mysql.data.mysqlclient.mysqlcommand"
+                    || class_name == "npgsqlcommand" || class_name == "npgsql.npgsqlcommand"
+                {
+                    let sql = if !ctor_args.is_empty() {
+                        self.evaluate_expr(&ctor_args[0])?.as_string()
+                    } else {
+                        String::new()
+                    };
+                    let conn_id = if ctor_args.len() >= 2 {
+                        // Second arg is a connection object — extract its __conn_id
+                        let conn_val = self.evaluate_expr(&ctor_args[1])?;
+                        if let Value::Object(cr) = &conn_val {
+                            cr.borrow().fields.get("__conn_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l) } else { None })
+                                .unwrap_or(0)
+                        } else { 0 }
+                    } else { 0 };
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("DbCommand".to_string()));
+                    fields.insert("__conn_id".to_string(), Value::Long(conn_id));
+                    fields.insert("commandtext".to_string(), Value::String(sql));
+                    fields.insert("commandtype".to_string(), Value::Integer(1)); // 1=Text
+                    let obj = crate::value::ObjectData { class_name: "DbCommand".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // ADODB.Recordset
+                if class_name == "adodb.recordset" || class_name == "recordset" {
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("DbRecordset".to_string()));
+                    fields.insert("__rs_id".to_string(), Value::Long(0)); // Not yet populated
+                    fields.insert("__conn_id".to_string(), Value::Long(0));
+                    fields.insert("source".to_string(), Value::String(String::new()));
+                    let obj = crate::value::ObjectData { class_name: "DbRecordset".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // DataTable (ADO.NET)
+                if class_name == "datatable" || class_name == "system.data.datatable" {
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("DataTable".to_string()));
+                    fields.insert("__rs_id".to_string(), Value::Long(0));
+                    fields.insert("tablename".to_string(), Value::String(
+                        if !ctor_args.is_empty() { self.evaluate_expr(&ctor_args[0])?.as_string() } else { String::new() }
+                    ));
+                    let obj = crate::value::ObjectData { class_name: "DataTable".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
                 if let Some(class_decl) = self.classes.get(&class_name).cloned() {
                     // Collect fields from hierarchy
                     let fields = self.collect_fields(&class_name);
@@ -1891,6 +1967,86 @@ impl Interpreter {
                             let content_len = obj_data.fields.get("__content").map(|v| v.as_string().len()).unwrap_or(0);
                             let pos = obj_data.fields.get("__position").map(|v| if let Value::Integer(i) = v { *i as usize } else { 0 }).unwrap_or(0);
                             return Ok(Value::Boolean(pos >= content_len));
+                        }
+
+                        // ===== DATABASE PROPERTY ACCESS =====
+                        let db_type = obj_data.fields.get("__type").and_then(|v| {
+                            if let Value::String(s) = v { Some(s.clone()) } else { None }
+                        }).unwrap_or_default();
+
+                        // DbRecordset properties (ADODB)
+                        if db_type == "DbRecordset" {
+                            let m = member.as_str().to_lowercase();
+                            let rs_id = obj_data.fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            match m.as_str() {
+                                "eof" => {
+                                    let dam = crate::data_access::get_global_dam();
+                                    let is_eof = dam.lock().unwrap().recordsets.get(&rs_id)
+                                        .map(|rs| rs.eof()).unwrap_or(true);
+                                    return Ok(Value::Boolean(is_eof));
+                                }
+                                "bof" => {
+                                    let dam = crate::data_access::get_global_dam();
+                                    let is_bof = dam.lock().unwrap().recordsets.get(&rs_id)
+                                        .map(|rs| rs.bof()).unwrap_or(true);
+                                    return Ok(Value::Boolean(is_bof));
+                                }
+                                "recordcount" => {
+                                    let dam = crate::data_access::get_global_dam();
+                                    let count = dam.lock().unwrap().recordsets.get(&rs_id)
+                                        .map(|rs| rs.record_count()).unwrap_or(0);
+                                    return Ok(Value::Integer(count));
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // DbReader properties (ADO.NET)
+                        if db_type == "DbReader" {
+                            let m = member.as_str().to_lowercase();
+                            let rs_id = obj_data.fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            match m.as_str() {
+                                "hasrows" => {
+                                    let dam = crate::data_access::get_global_dam();
+                                    let has = dam.lock().unwrap().recordsets.get(&rs_id)
+                                        .map(|rs| !rs.rows.is_empty()).unwrap_or(false);
+                                    return Ok(Value::Boolean(has));
+                                }
+                                "fieldcount" => {
+                                    let dam = crate::data_access::get_global_dam();
+                                    let count = dam.lock().unwrap().recordsets.get(&rs_id)
+                                        .map(|rs| rs.field_count()).unwrap_or(0);
+                                    return Ok(Value::Integer(count));
+                                }
+                                "isclosed" => {
+                                    let dam = crate::data_access::get_global_dam();
+                                    let closed = !dam.lock().unwrap().recordsets.contains_key(&rs_id);
+                                    return Ok(Value::Boolean(closed));
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // DbConnection properties
+                        if db_type == "DbConnection" {
+                            let m = member.as_str().to_lowercase();
+                            match m.as_str() {
+                                "state" => {
+                                    let state = obj_data.fields.get("state")
+                                        .cloned().unwrap_or(Value::Integer(0));
+                                    return Ok(state);
+                                }
+                                "connectionstring" => {
+                                    let cs = obj_data.fields.get("connectionstring")
+                                        .cloned().unwrap_or(Value::String(String::new()));
+                                    return Ok(cs);
+                                }
+                                _ => {}
+                            }
                         }
                         
                         // 1. Check if it's a field in the map (case-insensitive)
@@ -3044,6 +3200,364 @@ impl Interpreter {
                     let has_dialog_type = obj_ref.borrow().fields.contains_key("_dialog_type");
                     if has_dialog_type {
                         return crate::builtins::dialogs::dialog_showdialog(&obj_val);
+                    }
+                }
+            }
+
+            // ===== DATABASE OBJECT METHOD DISPATCH =====
+            if let Value::Object(obj_ref) = &obj_val {
+                let type_name = obj_ref.borrow().fields.get("__type").and_then(|v| {
+                    if let Value::String(s) = v { Some(s.clone()) } else { None }
+                }).unwrap_or_default();
+
+                let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                    .map(|arg| self.evaluate_expr(arg))
+                    .collect();
+                let arg_values = arg_values?;
+
+                // --- DbConnection methods ---
+                if type_name == "DbConnection" {
+                    match method_name.as_str() {
+                        "open" => {
+                            // Get or update connection string
+                            let conn_str = if !arg_values.is_empty() {
+                                let cs = arg_values[0].as_string();
+                                obj_ref.borrow_mut().fields.insert("connectionstring".to_string(), Value::String(cs.clone()));
+                                cs
+                            } else {
+                                obj_ref.borrow().fields.get("connectionstring")
+                                    .map(|v| v.as_string()).unwrap_or_default()
+                            };
+                            let dam = crate::data_access::get_global_dam();
+                            let conn_id = dam.lock().unwrap().open_connection(&conn_str)
+                                .map_err(|e| RuntimeError::Custom(e))?;
+                            obj_ref.borrow_mut().fields.insert("__conn_id".to_string(), Value::Long(conn_id as i64));
+                            obj_ref.borrow_mut().fields.insert("state".to_string(), Value::Integer(1));
+                            return Ok(Value::Nothing);
+                        }
+                        "close" | "dispose" => {
+                            let conn_id = obj_ref.borrow().fields.get("__conn_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            if conn_id > 0 {
+                                let dam = crate::data_access::get_global_dam();
+                                let _ = dam.lock().unwrap().close_connection(conn_id);
+                            }
+                            obj_ref.borrow_mut().fields.insert("__conn_id".to_string(), Value::Long(0));
+                            obj_ref.borrow_mut().fields.insert("state".to_string(), Value::Integer(0));
+                            return Ok(Value::Nothing);
+                        }
+                        "execute" => {
+                            // ADODB-style: conn.Execute(sql) returns a Recordset
+                            let sql = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                            let conn_id = obj_ref.borrow().fields.get("__conn_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let result = dam.lock().unwrap().execute(conn_id, &sql)
+                                .map_err(|e| RuntimeError::Custom(e))?;
+                            match result {
+                                crate::data_access::ExecuteResult::Recordset(rs_id) => {
+                                    let mut fields = std::collections::HashMap::new();
+                                    fields.insert("__type".to_string(), Value::String("DbRecordset".to_string()));
+                                    fields.insert("__rs_id".to_string(), Value::Long(rs_id as i64));
+                                    fields.insert("__conn_id".to_string(), Value::Long(conn_id as i64));
+                                    let obj = crate::value::ObjectData { class_name: "DbRecordset".to_string(), fields };
+                                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                                }
+                                crate::data_access::ExecuteResult::RowsAffected(n) => {
+                                    return Ok(Value::Long(n));
+                                }
+                            }
+                        }
+                        "createcommand" => {
+                            // ADO.NET: conn.CreateCommand() returns a new Command
+                            let conn_id = obj_ref.borrow().fields.get("__conn_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l) } else { None })
+                                .unwrap_or(0);
+                            let mut fields = std::collections::HashMap::new();
+                            fields.insert("__type".to_string(), Value::String("DbCommand".to_string()));
+                            fields.insert("__conn_id".to_string(), Value::Long(conn_id));
+                            fields.insert("commandtext".to_string(), Value::String(String::new()));
+                            fields.insert("commandtype".to_string(), Value::Integer(1));
+                            let obj = crate::value::ObjectData { class_name: "DbCommand".to_string(), fields };
+                            return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // --- DbCommand methods ---
+                if type_name == "DbCommand" {
+                    match method_name.as_str() {
+                        "executereader" => {
+                            let sql = obj_ref.borrow().fields.get("commandtext")
+                                .map(|v| v.as_string()).unwrap_or_default();
+                            let conn_id = obj_ref.borrow().fields.get("__conn_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let rs_id = dam.lock().unwrap().execute_reader(conn_id, &sql)
+                                .map_err(|e| RuntimeError::Custom(e))?;
+                            // Return a DbReader (ADO.NET SqlDataReader equivalent)
+                            let mut fields = std::collections::HashMap::new();
+                            fields.insert("__type".to_string(), Value::String("DbReader".to_string()));
+                            fields.insert("__rs_id".to_string(), Value::Long(rs_id as i64));
+                            fields.insert("__started".to_string(), Value::Boolean(false));
+                            let obj = crate::value::ObjectData { class_name: "DbReader".to_string(), fields };
+                            return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                        }
+                        "executenonquery" => {
+                            let sql = obj_ref.borrow().fields.get("commandtext")
+                                .map(|v| v.as_string()).unwrap_or_default();
+                            let conn_id = obj_ref.borrow().fields.get("__conn_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let affected = dam.lock().unwrap().execute_non_query(conn_id, &sql)
+                                .map_err(|e| RuntimeError::Custom(e))?;
+                            return Ok(Value::Integer(affected as i32));
+                        }
+                        "executescalar" => {
+                            let sql = obj_ref.borrow().fields.get("commandtext")
+                                .map(|v| v.as_string()).unwrap_or_default();
+                            let conn_id = obj_ref.borrow().fields.get("__conn_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let result = dam.lock().unwrap().execute_scalar(conn_id, &sql)
+                                .map_err(|e| RuntimeError::Custom(e))?;
+                            // Try to parse as number, else return string
+                            if let Ok(i) = result.parse::<i32>() {
+                                return Ok(Value::Integer(i));
+                            }
+                            if let Ok(f) = result.parse::<f64>() {
+                                return Ok(Value::Double(f));
+                            }
+                            return Ok(Value::String(result));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // --- DbRecordset methods (ADODB Recordset API) ---
+                if type_name == "DbRecordset" {
+                    match method_name.as_str() {
+                        "open" => {
+                            // rs.Open sql, conn
+                            let sql = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                            let conn_id = if let Some(conn_val) = arg_values.get(1) {
+                                if let Value::Object(cr) = conn_val {
+                                    cr.borrow().fields.get("__conn_id")
+                                        .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                        .unwrap_or(0)
+                                } else { 0 }
+                            } else {
+                                obj_ref.borrow().fields.get("__conn_id")
+                                    .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                    .unwrap_or(0)
+                            };
+                            let dam = crate::data_access::get_global_dam();
+                            let rs_id = dam.lock().unwrap().execute_reader(conn_id, &sql)
+                                .map_err(|e| RuntimeError::Custom(e))?;
+                            obj_ref.borrow_mut().fields.insert("__rs_id".to_string(), Value::Long(rs_id as i64));
+                            obj_ref.borrow_mut().fields.insert("__conn_id".to_string(), Value::Long(conn_id as i64));
+                            return Ok(Value::Nothing);
+                        }
+                        "movenext" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            if let Some(rs) = dam.lock().unwrap().recordsets.get_mut(&rs_id) {
+                                rs.move_next();
+                            }
+                            return Ok(Value::Nothing);
+                        }
+                        "movefirst" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            if let Some(rs) = dam.lock().unwrap().recordsets.get_mut(&rs_id) {
+                                rs.move_first();
+                            }
+                            return Ok(Value::Nothing);
+                        }
+                        "movelast" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            if let Some(rs) = dam.lock().unwrap().recordsets.get_mut(&rs_id) {
+                                rs.move_last();
+                            }
+                            return Ok(Value::Nothing);
+                        }
+                        "moveprevious" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            if let Some(rs) = dam.lock().unwrap().recordsets.get_mut(&rs_id) {
+                                rs.move_previous();
+                            }
+                            return Ok(Value::Nothing);
+                        }
+                        "close" | "dispose" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            dam.lock().unwrap().close_recordset(rs_id);
+                            return Ok(Value::Nothing);
+                        }
+                        "fields" => {
+                            // rs.Fields("name") — return a field-accessor object
+                            let field_name = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let dam_lock = dam.lock().unwrap();
+                            if let Some(rs) = dam_lock.recordsets.get(&rs_id) {
+                                if let Some(row) = rs.current_row() {
+                                    let val = row.get_by_name(&field_name)
+                                        .unwrap_or("NULL")
+                                        .to_string();
+                                    // Return a Field object with .Value property
+                                    let mut fld = std::collections::HashMap::new();
+                                    fld.insert("__type".to_string(), Value::String("DbField".to_string()));
+                                    fld.insert("value".to_string(), Value::String(val.clone()));
+                                    fld.insert("name".to_string(), Value::String(field_name));
+                                    let obj = crate::value::ObjectData { class_name: "DbField".to_string(), fields: fld };
+                                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                                }
+                            }
+                            return Ok(Value::Nothing);
+                        }
+                        _ => {}
+                    }
+                }
+
+                // --- DbReader methods (ADO.NET SqlDataReader API) ---
+                if type_name == "DbReader" {
+                    match method_name.as_str() {
+                        "read" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let started = obj_ref.borrow().fields.get("__started")
+                                .and_then(|v| if let Value::Boolean(b) = v { Some(*b) } else { None })
+                                .unwrap_or(false);
+                            let dam = crate::data_access::get_global_dam();
+                            let has_row = if let Some(rs) = dam.lock().unwrap().recordsets.get_mut(&rs_id) {
+                                if !started {
+                                    // First Read() — check if any rows exist
+                                    !rs.eof()
+                                } else {
+                                    rs.move_next();
+                                    !rs.eof()
+                                }
+                            } else { false };
+                            obj_ref.borrow_mut().fields.insert("__started".to_string(), Value::Boolean(true));
+                            return Ok(Value::Boolean(has_row));
+                        }
+                        "getstring" | "getvalue" | "item" => {
+                            // reader.GetString(ordinal) or reader("name")
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let dam_lock = dam.lock().unwrap();
+                            if let Some(rs) = dam_lock.recordsets.get(&rs_id) {
+                                if let Some(row) = rs.current_row() {
+                                    let val = match &arg_values[0] {
+                                        Value::Integer(i) => row.get_by_index(*i as usize)
+                                            .unwrap_or("NULL").to_string(),
+                                        Value::String(s) => row.get_by_name(s)
+                                            .unwrap_or("NULL").to_string(),
+                                        _ => arg_values[0].as_string(),
+                                    };
+                                    return Ok(Value::String(val));
+                                }
+                            }
+                            return Ok(Value::Nothing);
+                        }
+                        "getint32" | "getint16" | "getint64" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let dam_lock = dam.lock().unwrap();
+                            if let Some(rs) = dam_lock.recordsets.get(&rs_id) {
+                                if let Some(row) = rs.current_row() {
+                                    let idx = arg_values[0].as_integer().unwrap_or(0) as usize;
+                                    let val_str = row.get_by_index(idx).unwrap_or("0");
+                                    let val = val_str.parse::<i32>().unwrap_or(0);
+                                    return Ok(Value::Integer(val));
+                                }
+                            }
+                            return Ok(Value::Integer(0));
+                        }
+                        "getdouble" | "getfloat" | "getdecimal" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let dam_lock = dam.lock().unwrap();
+                            if let Some(rs) = dam_lock.recordsets.get(&rs_id) {
+                                if let Some(row) = rs.current_row() {
+                                    let idx = arg_values[0].as_integer().unwrap_or(0) as usize;
+                                    let val_str = row.get_by_index(idx).unwrap_or("0");
+                                    let val = val_str.parse::<f64>().unwrap_or(0.0);
+                                    return Ok(Value::Double(val));
+                                }
+                            }
+                            return Ok(Value::Double(0.0));
+                        }
+                        "getboolean" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let dam_lock = dam.lock().unwrap();
+                            if let Some(rs) = dam_lock.recordsets.get(&rs_id) {
+                                if let Some(row) = rs.current_row() {
+                                    let idx = arg_values[0].as_integer().unwrap_or(0) as usize;
+                                    let val_str = row.get_by_index(idx).unwrap_or("false");
+                                    let val = val_str == "1" || val_str.eq_ignore_ascii_case("true");
+                                    return Ok(Value::Boolean(val));
+                                }
+                            }
+                            return Ok(Value::Boolean(false));
+                        }
+                        "getordinal" => {
+                            let col_name = arg_values[0].as_string();
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            let dam_lock = dam.lock().unwrap();
+                            if let Some(rs) = dam_lock.recordsets.get(&rs_id) {
+                                let lower = col_name.to_lowercase();
+                                for (i, c) in rs.columns.iter().enumerate() {
+                                    if c.to_lowercase() == lower {
+                                        return Ok(Value::Integer(i as i32));
+                                    }
+                                }
+                            }
+                            return Ok(Value::Integer(-1));
+                        }
+                        "close" | "dispose" => {
+                            let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                .unwrap_or(0);
+                            let dam = crate::data_access::get_global_dam();
+                            dam.lock().unwrap().close_recordset(rs_id);
+                            return Ok(Value::Nothing);
+                        }
+                        _ => {}
                     }
                 }
             }

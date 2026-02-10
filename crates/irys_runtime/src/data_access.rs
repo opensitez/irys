@@ -267,9 +267,15 @@ impl DataAccessManager {
         }
 
         let pool = self.runtime.block_on(async {
-            sqlx::any::AnyPoolOptions::new()
-                .max_connections(5)
-                .connect(&url)
+            let mut opts = sqlx::any::AnyPoolOptions::new();
+            // For SQLite in-memory databases, we must use a single connection
+            // because each connection gets its own separate database.
+            if backend == DbBackend::Sqlite && url.contains(":memory:") {
+                opts = opts.max_connections(1).min_connections(1);
+            } else {
+                opts = opts.max_connections(5);
+            }
+            opts.connect(&url)
                 .await
         }).map_err(|e| format!("Failed to connect: {}", e))?;
 
