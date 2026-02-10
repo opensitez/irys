@@ -143,6 +143,8 @@ pub struct DataAccessManager {
     connections: HashMap<u64, DbConnection>,
     /// Active recordsets keyed by recordset ID.
     pub recordsets: HashMap<u64, RecordSet>,
+    /// Multi-result storage: rs_id → vec of additional RecordSets.
+    pub pending_results: HashMap<u64, Vec<RecordSet>>,
 }
 
 struct DbConnection {
@@ -152,6 +154,12 @@ struct DbConnection {
     pool: sqlx::AnyPool,
     #[allow(dead_code)]
     connection_string: String,
+    /// Connection timeout parsed from connection string (seconds).
+    #[allow(dead_code)]
+    pub connect_timeout: u32,
+    /// Max pool size parsed from connection string.
+    #[allow(dead_code)]
+    pub max_pool_size: u32,
 }
 
 impl DataAccessManager {
@@ -165,6 +173,7 @@ impl DataAccessManager {
             runtime,
             connections: HashMap::new(),
             recordsets: HashMap::new(),
+            pending_results: HashMap::new(),
         }
     }
 
@@ -259,12 +268,24 @@ impl DataAccessManager {
     pub fn open_connection(&mut self, conn_str: &str) -> Result<u64, String> {
         let (backend, url) = Self::parse_connection_string(conn_str)?;
 
+        // Parse pool and timeout settings from connection string
+        let pairs = Self::parse_kv_pairs(conn_str);
+        let max_pool: u32 = pairs.get("max pool size")
+            .or(pairs.get("maxpoolsize"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
+        let min_pool: u32 = pairs.get("min pool size")
+            .or(pairs.get("minpoolsize"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let conn_timeout: u32 = pairs.get("connect timeout")
+            .or(pairs.get("connection timeout"))
+            .or(pairs.get("timeout"))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+
         // Install the sqlx Any driver for this backend
-        match backend {
-            DbBackend::Sqlite => { sqlx::any::install_default_drivers(); }
-            DbBackend::Postgres => { sqlx::any::install_default_drivers(); }
-            DbBackend::MySql => { sqlx::any::install_default_drivers(); }
-        }
+        sqlx::any::install_default_drivers();
 
         let pool = self.runtime.block_on(async {
             let mut opts = sqlx::any::AnyPoolOptions::new();
@@ -273,8 +294,9 @@ impl DataAccessManager {
             if backend == DbBackend::Sqlite && url.contains(":memory:") {
                 opts = opts.max_connections(1).min_connections(1);
             } else {
-                opts = opts.max_connections(5);
+                opts = opts.max_connections(max_pool).min_connections(min_pool);
             }
+            opts = opts.acquire_timeout(std::time::Duration::from_secs(conn_timeout as u64));
             opts.connect(&url)
                 .await
         }).map_err(|e| format!("Failed to connect: {}", e))?;
@@ -285,6 +307,8 @@ impl DataAccessManager {
             backend,
             pool,
             connection_string: conn_str.to_string(),
+            connect_timeout: conn_timeout,
+            max_pool_size: max_pool,
         });
 
         Ok(id)
@@ -477,6 +501,220 @@ impl DataAccessManager {
             result = result.replace(name.as_str(), &replacement);
         }
         result
+    }
+
+    // ===== Stored Procedures =====
+
+    /// Execute a stored procedure.
+    /// Wraps the procedure name into the appropriate backend-specific CALL syntax.
+    pub fn execute_stored_proc(&mut self, conn_id: u64, proc_name: &str, params: &[(String, String)]) -> Result<ExecuteResult, String> {
+        let backend = self.connections.get(&conn_id)
+            .map(|c| c.backend.clone())
+            .ok_or_else(|| format!("Connection {} not found", conn_id))?;
+
+        let call_sql = match backend {
+            DbBackend::Sqlite => {
+                // SQLite doesn't have stored procedures — just execute as a query
+                // This allows users to test with SELECT-based "procedures"
+                if params.is_empty() {
+                    proc_name.to_string()
+                } else {
+                    let placeholders: Vec<String> = params.iter().map(|(_, v)| {
+                        if v.parse::<f64>().is_ok() || v.eq_ignore_ascii_case("null") {
+                            v.clone()
+                        } else {
+                            format!("'{}'", v.replace('\'', "''"))
+                        }
+                    }).collect();
+                    format!("SELECT {}({})", proc_name, placeholders.join(", "))
+                }
+            }
+            DbBackend::Postgres => {
+                if params.is_empty() {
+                    format!("SELECT * FROM {}()", proc_name)
+                } else {
+                    let placeholders: Vec<String> = params.iter().map(|(_, v)| {
+                        if v.parse::<f64>().is_ok() || v.eq_ignore_ascii_case("null") {
+                            v.clone()
+                        } else {
+                            format!("'{}'", v.replace('\'', "''"))
+                        }
+                    }).collect();
+                    format!("SELECT * FROM {}({})", proc_name, placeholders.join(", "))
+                }
+            }
+            DbBackend::MySql => {
+                if params.is_empty() {
+                    format!("CALL {}()", proc_name)
+                } else {
+                    let placeholders: Vec<String> = params.iter().map(|(_, v)| {
+                        if v.parse::<f64>().is_ok() || v.eq_ignore_ascii_case("null") {
+                            v.clone()
+                        } else {
+                            format!("'{}'", v.replace('\'', "''"))
+                        }
+                    }).collect();
+                    format!("CALL {}({})", proc_name, placeholders.join(", "))
+                }
+            }
+        };
+
+        self.execute(conn_id, &call_sql)
+    }
+
+    // ===== Multiple Result Sets =====
+
+    /// Execute multiple statements separated by semicolons.
+    /// Returns the first result set ID and stores subsequent ones for NextResult().
+    pub fn execute_multi(&mut self, conn_id: u64, sql: &str) -> Result<u64, String> {
+        // Split SQL by semicolons (respecting quoted strings)
+        let statements = Self::split_sql_statements(sql);
+
+        if statements.is_empty() {
+            return Err("No SQL statements provided".to_string());
+        }
+
+        // Execute first statement as the primary result
+        let first_rs_id = self.execute_reader(conn_id, &statements[0])?;
+
+        // Execute remaining and store as pending
+        let mut pending = Vec::new();
+        for stmt in &statements[1..] {
+            let trimmed = stmt.trim();
+            if trimmed.is_empty() { continue; }
+            let upper = trimmed.to_uppercase();
+            if upper.starts_with("SELECT") || upper.starts_with("PRAGMA") || upper.starts_with("SHOW") {
+                let rs_id = self.execute_reader(conn_id, trimmed)?;
+                if let Some(rs) = self.recordsets.remove(&rs_id) {
+                    pending.push(rs);
+                }
+            }
+        }
+
+        if !pending.is_empty() {
+            self.pending_results.insert(first_rs_id, pending);
+        }
+
+        Ok(first_rs_id)
+    }
+
+    /// Advance to next result set. Returns true if another result set is available.
+    pub fn next_result(&mut self, rs_id: u64) -> bool {
+        if let Some(pending) = self.pending_results.get_mut(&rs_id) {
+            if let Some(next_rs) = pending.first().cloned() {
+                pending.remove(0);
+                // Replace current recordset with next one
+                let mut new_rs = next_rs;
+                new_rs.id = rs_id; // Reuse the same ID
+                self.recordsets.insert(rs_id, new_rs);
+                return true;
+            }
+            self.pending_results.remove(&rs_id);
+        }
+        false
+    }
+
+    /// Split SQL string by semicolons, respecting single-quoted strings.
+    fn split_sql_statements(sql: &str) -> Vec<String> {
+        let mut stmts = Vec::new();
+        let mut current = String::new();
+        let mut in_string = false;
+        let mut chars = sql.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\'' {
+                in_string = !in_string;
+                current.push(ch);
+            } else if ch == ';' && !in_string {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    stmts.push(trimmed);
+                }
+                current.clear();
+            } else {
+                current.push(ch);
+            }
+        }
+        let trimmed = current.trim().to_string();
+        if !trimmed.is_empty() {
+            stmts.push(trimmed);
+        }
+        stmts
+    }
+
+    // ===== Schema Discovery =====
+
+    /// Get schema information for a connection.
+    /// Returns column info as a RecordSet with schema metadata.
+    pub fn get_schema(&mut self, conn_id: u64, collection: &str) -> Result<u64, String> {
+        let conn = self.connections.get(&conn_id)
+            .ok_or_else(|| format!("Connection {} not found", conn_id))?;
+
+        let sql = match conn.backend {
+            DbBackend::Sqlite => {
+                match collection.to_lowercase().as_str() {
+                    "tables" => "SELECT name AS TABLE_NAME, type AS TABLE_TYPE FROM sqlite_master WHERE type IN ('table','view') ORDER BY name".to_string(),
+                    "columns" => "PRAGMA table_list".to_string(),
+                    _ => format!("SELECT name AS TABLE_NAME, type AS TABLE_TYPE FROM sqlite_master WHERE type='table' ORDER BY name"),
+                }
+            }
+            DbBackend::Postgres => {
+                match collection.to_lowercase().as_str() {
+                    "tables" => "SELECT table_name AS TABLE_NAME, table_type AS TABLE_TYPE FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name".to_string(),
+                    "columns" => "SELECT table_name AS TABLE_NAME, column_name AS COLUMN_NAME, data_type AS DATA_TYPE, is_nullable AS IS_NULLABLE FROM information_schema.columns WHERE table_schema='public' ORDER BY table_name, ordinal_position".to_string(),
+                    _ => "SELECT table_name AS TABLE_NAME FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name".to_string(),
+                }
+            }
+            DbBackend::MySql => {
+                match collection.to_lowercase().as_str() {
+                    "tables" => "SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME".to_string(),
+                    "columns" => "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.columns WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME, ORDINAL_POSITION".to_string(),
+                    _ => "SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME".to_string(),
+                }
+            }
+        };
+
+        self.execute_reader(conn_id, &sql)
+    }
+
+    /// Get schema table for a reader/recordset — returns column metadata.
+    pub fn get_schema_table(&mut self, rs_id: u64) -> Result<u64, String> {
+        let columns = if let Some(rs) = self.recordsets.get(&rs_id) {
+            rs.columns.clone()
+        } else {
+            return Err("RecordSet not found".to_string());
+        };
+
+        // Build a schema recordset with column info
+        let schema_cols = vec![
+            "ColumnName".to_string(),
+            "ColumnOrdinal".to_string(),
+            "DataType".to_string(),
+        ];
+        let mut schema_rows = Vec::new();
+        for (i, col) in columns.iter().enumerate() {
+            schema_rows.push(DbRow {
+                columns: schema_cols.clone(),
+                values: vec![col.clone(), i.to_string(), "String".to_string()],
+            });
+        }
+
+        let rs = RecordSet::new(schema_cols, schema_rows, 0);
+        let id = rs.id;
+        self.recordsets.insert(id, rs);
+        Ok(id)
+    }
+
+    /// Get connection info (provider, server version, etc.)
+    pub fn get_connection_info(&self, conn_id: u64) -> Option<(String, String)> {
+        self.connections.get(&conn_id).map(|c| {
+            let provider = match c.backend {
+                DbBackend::Sqlite => "SQLite".to_string(),
+                DbBackend::Postgres => "PostgreSQL".to_string(),
+                DbBackend::MySql => "MySQL".to_string(),
+            };
+            (provider, c.connection_string.clone())
+        })
     }
 }
 
