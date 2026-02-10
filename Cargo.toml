@@ -6,6 +6,8 @@ members = [
     "crates/irys_forms",
     "crates/irys_editor",
     "crates/irys_project",
+    "crates/irys_cli",
+    "crates/irys_ui",
 ]
 
 [workspace.package]
@@ -18,10 +20,6 @@ license = "MIT"
 # Parser dependencies
 pest = "2.7"
 pest_derive = "2.7"
-
-# GUI dependencies - egui for proper IDE support
-eframe = "0.27"
-egui = "0.27"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -39,3 +37,4 @@ irys_parser = { path = "crates/irys_parser" }
 irys_runtime = { path = "crates/irys_runtime" }
 irys_forms = { path = "crates/irys_forms" }
 irys_project = { path = "crates/irys_project" }
+irys_ui = { path = "crates/irys_ui" }
