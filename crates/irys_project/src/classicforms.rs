@@ -42,6 +42,18 @@ pub fn load_form_frm(path: &Path) -> SaveResult<FormModule> {
                         control.set_list_items(current_list_items.clone());
                         current_list_items.clear();
                     }
+                    // Post-parse fixup for legacy VB.Data controls:
+                    // Infer the actual non-visual type from properties present.
+                    if control.control_type == ControlType::DataAdapterComponent {
+                        if control.properties.get_string("DataSource").is_some() {
+                            control.control_type = ControlType::BindingSourceComponent;
+                        } else if control.properties.get_string("DataSetName").is_some() {
+                            control.control_type = ControlType::DataSetComponent;
+                        } else if control.properties.get_string("TableName").is_some() {
+                            control.control_type = ControlType::DataTableComponent;
+                        }
+                        // Otherwise stays DataAdapterComponent (has ConnectionString/SelectCommand or unknown)
+                    }
                     controls.push(control);
                 }
                 in_control = false;
@@ -109,6 +121,18 @@ pub fn load_form_frm(path: &Path) -> SaveResult<FormModule> {
                     if let Some(val) = parse_prop_bool(trimmed) { control.properties.set("ToolbarVisible", val); }
                 } else if trimmed.starts_with("PathSeparator") {
                     if let Some(val) = parse_prop_string(trimmed) { control.properties.set("PathSeparator", val); }
+                } else if trimmed.starts_with("ConnectionString") {
+                    if let Some(val) = parse_prop_string(trimmed) { control.properties.set("ConnectionString", val); }
+                } else if trimmed.starts_with("SelectCommand") {
+                    if let Some(val) = parse_prop_string(trimmed) { control.properties.set("SelectCommand", val); }
+                } else if trimmed.starts_with("DataSource") {
+                    if let Some(val) = parse_prop_string(trimmed) { control.properties.set("DataSource", val); }
+                } else if trimmed.starts_with("DataMember") {
+                    if let Some(val) = parse_prop_string(trimmed) { control.properties.set("DataMember", val); }
+                } else if trimmed.starts_with("DataSetName") {
+                    if let Some(val) = parse_prop_string(trimmed) { control.properties.set("DataSetName", val); }
+                } else if trimmed.starts_with("TableName") {
+                    if let Some(val) = parse_prop_string(trimmed) { control.properties.set("TableName", val); }
                 }
             }
         } else {
@@ -167,6 +191,11 @@ fn map_vb_type_to_control_type(vb_type: &str) -> ControlType {
         "MSComctlLib.TreeView" => ControlType::TreeView,
         "MSDataGridLib.DataGrid" => ControlType::DataGridView,
         "MSComctlLib.ListView" => ControlType::ListView,
+        "VB.BindingSource" => ControlType::BindingSourceComponent,
+        "VB.DataAdapter" => ControlType::DataAdapterComponent,
+        "VB.DataSet" => ControlType::DataSetComponent,
+        "VB.DataTable" => ControlType::DataTableComponent,
+        "VB.Data" => ControlType::DataAdapterComponent, // legacy fallback
         _ => ControlType::Button,
     }
 }
@@ -180,9 +209,11 @@ fn parse_prop_int(line: &str) -> Option<i32> {
 }
 
 fn parse_prop_string(line: &str) -> Option<String> {
-    let parts: Vec<&str> = line.split('=').collect();
-    if parts.len() > 1 {
-        return Some(parts[1].trim().trim_matches('"').to_string());
+    // Split only at the first '=' to preserve '=' chars inside the value
+    // e.g. ConnectionString = "Server=localhost;Database=mydb" -> "Server=localhost;Database=mydb"
+    if let Some(idx) = line.find('=') {
+        let val = line[idx + 1..].trim().trim_matches('"');
+        return Some(val.to_string());
     }
     None
 }

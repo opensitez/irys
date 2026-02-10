@@ -89,6 +89,14 @@ pub fn Toolbox() -> Element {
                                 key: "{name}",
                                 style: "padding: 5px 8px; cursor: pointer; background: {bg_color}; color: {text_color}; border-radius: 3px; margin-bottom: 2px; font-size: 12px;",
                                 onclick: move |_| {
+                                    // Non-visual components are added immediately (no form canvas click needed)
+                                    if let Some(ct) = control_type {
+                                        if ct.is_non_visual() {
+                                            state.add_control_at(ct, 0, 0);
+                                            selected_tool.set(None); // reset to pointer
+                                            return;
+                                        }
+                                    }
                                     selected_tool.set(control_type);
                                 },
                                 "{icon}{name}"

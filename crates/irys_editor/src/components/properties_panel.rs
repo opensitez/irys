@@ -572,14 +572,56 @@ pub fn PropertiesPanel() -> Element {
                                                         .unwrap_or_default();
                                                     let has_complex_binding = control.control_type.supports_complex_binding();
 
+                                                    // Helper: resolve available column names by walking the binding chain
+                                                    // control -> BindingSource (bs_name) -> DataAdapter -> ConnectionString + SelectCommand -> columns
+                                                    // Also considers BindingSource.DataMember (table name) as fallback query
+                                                    let resolve_columns_for_bs = |bs_name: &str| -> Vec<String> {
+                                                        if bs_name.is_empty() { return Vec::new(); }
+                                                        let form_ref = state.get_current_form();
+                                                        let form = match form_ref.as_ref() { Some(f) => f, None => return Vec::new() };
+                                                        // Find the BindingSource control
+                                                        let bs_ctrl = form.controls.iter()
+                                                            .find(|c| c.name.eq_ignore_ascii_case(bs_name)
+                                                                && matches!(c.control_type, irys_forms::ControlType::BindingSourceComponent));
+                                                        let bs_ctrl = match bs_ctrl { Some(c) => c, None => return Vec::new() };
+                                                        // Get the DataAdapter name from the BindingSource
+                                                        let da_name = match bs_ctrl.properties.get_string("DataSource") {
+                                                            Some(s) if !s.is_empty() => s.to_string(),
+                                                            _ => return Vec::new(),
+                                                        };
+                                                        // Get the DataMember (table name) from the BindingSource
+                                                        let data_member = bs_ctrl.properties.get_string("DataMember")
+                                                            .map(|s| s.to_string()).unwrap_or_default();
+                                                        // Find the DataAdapter control
+                                                        let da_ctrl = form.controls.iter()
+                                                            .find(|c| c.name.eq_ignore_ascii_case(&da_name)
+                                                                && matches!(c.control_type, irys_forms::ControlType::DataAdapterComponent));
+                                                        let da_ctrl = match da_ctrl { Some(c) => c, None => return Vec::new() };
+                                                        let conn_str = da_ctrl.properties.get_string("ConnectionString").unwrap_or("");
+                                                        if conn_str.is_empty() { return Vec::new(); }
+                                                        // Use the DataAdapter's SelectCommand if available,
+                                                        // otherwise fall back to "SELECT * FROM <DataMember>" if a table is selected
+                                                        let da_select = da_ctrl.properties.get_string("SelectCommand").unwrap_or("").to_string();
+                                                        let query = if !da_select.is_empty() {
+                                                            da_select
+                                                        } else if !data_member.is_empty() {
+                                                            format!("SELECT * FROM {}", data_member)
+                                                        } else {
+                                                            return Vec::new();
+                                                        };
+                                                        irys_runtime::data_access::fetch_columns_for_query(conn_str, &query)
+                                                            .unwrap_or_default()
+                                                    };
+
                                                     rsx! {
                                                         div { style: "grid-column: 1 / -1; margin-top: 8px; padding-top: 6px; border-top: 1px solid #ddd; font-weight: bold; font-size: 11px; color: #0078d4; text-transform: uppercase;",
                                                             "Data"
                                                         }
 
-                                                        // === Simple Data Bindings for all visual controls ===
+                                                        // === Simple Data Bindings for visual controls WITHOUT complex binding ===
                                                         // (TextBox→Text, Label→Text, CheckBox→Checked, etc.)
-                                                        if !is_non_visual {
+                                                        // Controls with complex binding (DataGridView, ListBox, ComboBox) use DataSource instead
+                                                        if !is_non_visual && !has_complex_binding {
                                                             {
                                                                 // Determine which control property to bind (the "bindable property")
                                                                 let bindable_prop = match control.control_type {
@@ -595,33 +637,39 @@ pub fn PropertiesPanel() -> Element {
                                                                     .map(|s| s.to_string()).unwrap_or_default();
                                                                 let current_binding_col = control.properties.get_string(&binding_key)
                                                                     .map(|s| s.to_string()).unwrap_or_default();
+                                                                let columns = resolve_columns_for_bs(&current_binding_bs);
 
                                                                 rsx! {
-                                                                    div { style: "grid-column: 1 / -1; font-size: 10px; color: #888; font-style: italic; margin-bottom: 2px;",
-                                                                        "(DataBindings)"
-                                                                    }
-
-                                                                    div { style: "font-weight: bold; font-size: 11px;", "Source" }
+                                                                    div { style: "font-weight: bold; font-size: 11px;", "DataSource" }
                                                                     select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{current_binding_bs}",
                                                                         onchange: move |evt| {
                                                                             state.update_control_property(cid, "DataBindings.Source", evt.value());
                                                                         },
-                                                                        option { value: "", "(none)" }
+                                                                        option { value: "", selected: current_binding_bs.is_empty(), "(none)" }
                                                                         for bs_name in &binding_sources {
-                                                                            option { value: "{bs_name}", "{bs_name}" }
+                                                                            option {
+                                                                                value: "{bs_name}",
+                                                                                selected: current_binding_bs == *bs_name,
+                                                                                "{bs_name}"
+                                                                            }
                                                                         }
                                                                     }
 
                                                                     div { style: "font-weight: bold; font-size: 11px;", "{bindable_prop}" }
-                                                                    input {
+                                                                    select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{current_binding_col}",
-                                                                        placeholder: "Column name",
                                                                         title: "DataBindings.Add(\"{bindable_prop}\", bindingSource, \"ColumnName\")",
-                                                                        oninput: move |evt| {
+                                                                        onchange: move |evt| {
                                                                             state.update_control_property(cid, &binding_key, evt.value());
+                                                                        },
+                                                                        option { value: "", selected: current_binding_col.is_empty(), "(none)" }
+                                                                        for col in &columns {
+                                                                            option {
+                                                                                value: "{col}",
+                                                                                selected: current_binding_col == *col,
+                                                                                "{col}"
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
@@ -629,34 +677,44 @@ pub fn PropertiesPanel() -> Element {
                                                         }
 
                                                         // === Complex binding (DataSource property) for list/grid controls ===
-                                                        // Visual controls bind to a BindingSource
-                                                        if has_complex_binding {
+                                                        // DataGridView, ListBox, ComboBox bind to a BindingSource via DataSource property
+                                                        if has_complex_binding && !matches!(control.control_type, irys_forms::ControlType::BindingNavigator) {
                                                             {
                                                                 let current_ds = control.properties.get_string("DataSource")
                                                                     .map(|s| s.to_string()).unwrap_or_default();
                                                                 let current_dm = control.properties.get_string("DataMember")
                                                                     .map(|s| s.to_string()).unwrap_or_default();
+                                                                let columns = resolve_columns_for_bs(&current_ds);
                                                                 rsx! {
                                                                     div { style: "font-weight: bold;", "DataSource" }
                                                                     select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{current_ds}",
                                                                         onchange: move |evt| {
                                                                             state.update_control_property(cid, "DataSource", evt.value());
                                                                         },
-                                                                        option { value: "", "(none)" }
+                                                                        option { value: "", selected: current_ds.is_empty(), "(none)" }
                                                                         for bs_name in &binding_sources {
-                                                                            option { value: "{bs_name}", "{bs_name}" }
+                                                                            option {
+                                                                                value: "{bs_name}",
+                                                                                selected: current_ds == *bs_name,
+                                                                                "{bs_name}"
+                                                                            }
                                                                         }
                                                                     }
 
                                                                     div { style: "font-weight: bold;", "DataMember" }
-                                                                    input {
+                                                                    select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{current_dm}",
-                                                                        placeholder: "(none)",
-                                                                        oninput: move |evt| {
+                                                                        onchange: move |evt| {
                                                                             state.update_control_property(cid, "DataMember", evt.value());
+                                                                        },
+                                                                        option { value: "", selected: current_dm.is_empty(), "(none)" }
+                                                                        for col in &columns {
+                                                                            option {
+                                                                                value: "{col}",
+                                                                                selected: current_dm == *col,
+                                                                                "{col}"
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
@@ -670,27 +728,53 @@ pub fn PropertiesPanel() -> Element {
                                                                     .map(|s| s.to_string()).unwrap_or_default();
                                                                 let current_dm = control.properties.get_string("DataMember")
                                                                     .map(|s| s.to_string()).unwrap_or_default();
+
+                                                                // Resolve tables for DataMember dropdown:
+                                                                // If the DataSource is a DataAdapter, we can list tables from its connection
+                                                                let da_tables: Vec<String> = if !current_ds.is_empty() {
+                                                                    let form_ref = state.get_current_form();
+                                                                    form_ref.as_ref().and_then(|f| {
+                                                                        let da = f.controls.iter()
+                                                                            .find(|c| c.name.eq_ignore_ascii_case(&current_ds)
+                                                                                && matches!(c.control_type, irys_forms::ControlType::DataAdapterComponent))?;
+                                                                        let cs = da.properties.get_string("ConnectionString")?;
+                                                                        if cs.is_empty() { return None; }
+                                                                        irys_runtime::data_access::test_connection_and_list_tables(cs).ok()
+                                                                    }).unwrap_or_default()
+                                                                } else {
+                                                                    Vec::new()
+                                                                };
+
                                                                 rsx! {
                                                                     div { style: "font-weight: bold;", "DataSource" }
                                                                     select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{current_ds}",
                                                                         onchange: move |evt| {
                                                                             state.update_control_property(cid, "DataSource", evt.value());
                                                                         },
-                                                                        option { value: "", "(none)" }
+                                                                        option { value: "", selected: current_ds.is_empty(), "(none)" }
                                                                         for ds_name in &bs_data_sources {
-                                                                            option { value: "{ds_name}", "{ds_name}" }
+                                                                            option {
+                                                                                value: "{ds_name}",
+                                                                                selected: current_ds == *ds_name,
+                                                                                "{ds_name}"
+                                                                            }
                                                                         }
                                                                     }
 
                                                                     div { style: "font-weight: bold;", "DataMember" }
-                                                                    input {
+                                                                    select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{current_dm}",
-                                                                        placeholder: "Table name",
-                                                                        oninput: move |evt| {
+                                                                        onchange: move |evt| {
                                                                             state.update_control_property(cid, "DataMember", evt.value());
+                                                                        },
+                                                                        option { value: "", selected: current_dm.is_empty(), "(none)" }
+                                                                        for tbl in &da_tables {
+                                                                            option {
+                                                                                value: "{tbl}",
+                                                                                selected: current_dm == *tbl,
+                                                                                "{tbl}"
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
@@ -700,27 +784,42 @@ pub fn PropertiesPanel() -> Element {
                                                         // DisplayMember/ValueMember for ListBox/ComboBox
                                                         if matches!(control.control_type, irys_forms::ControlType::ListBox | irys_forms::ControlType::ComboBox) {
                                                             {
+                                                                let current_ds = control.properties.get_string("DataSource")
+                                                                    .map(|s| s.to_string()).unwrap_or_default();
+                                                                let columns = resolve_columns_for_bs(&current_ds);
                                                                 let display_member = control.properties.get_string("DisplayMember")
                                                                     .map(|s| s.to_string()).unwrap_or_default();
                                                                 let value_member = control.properties.get_string("ValueMember")
                                                                     .map(|s| s.to_string()).unwrap_or_default();
                                                                 rsx! {
                                                                     div { style: "font-weight: bold;", "DisplayMember" }
-                                                                    input {
+                                                                    select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{display_member}",
-                                                                        placeholder: "Column to display",
-                                                                        oninput: move |evt| {
+                                                                        onchange: move |evt| {
                                                                             state.update_control_property(cid, "DisplayMember", evt.value());
+                                                                        },
+                                                                        option { value: "", selected: display_member.is_empty(), "(none)" }
+                                                                        for col in &columns {
+                                                                            option {
+                                                                                value: "{col}",
+                                                                                selected: display_member == *col,
+                                                                                "{col}"
+                                                                            }
                                                                         }
                                                                     }
                                                                     div { style: "font-weight: bold;", "ValueMember" }
-                                                                    input {
+                                                                    select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{value_member}",
-                                                                        placeholder: "Column for value",
-                                                                        oninput: move |evt| {
+                                                                        onchange: move |evt| {
                                                                             state.update_control_property(cid, "ValueMember", evt.value());
+                                                                        },
+                                                                        option { value: "", selected: value_member.is_empty(), "(none)" }
+                                                                        for col in &columns {
+                                                                            option {
+                                                                                value: "{col}",
+                                                                                selected: value_member == *col,
+                                                                                "{col}"
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
@@ -736,13 +835,16 @@ pub fn PropertiesPanel() -> Element {
                                                                     div { style: "font-weight: bold;", "BindingSource" }
                                                                     select {
                                                                         style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                        value: "{current_bs}",
                                                                         onchange: move |evt| {
                                                                             state.update_control_property(cid, "BindingSource", evt.value());
                                                                         },
-                                                                        option { value: "", "(none)" }
+                                                                        option { value: "", selected: current_bs.is_empty(), "(none)" }
                                                                         for bs_name in &binding_sources {
-                                                                            option { value: "{bs_name}", "{bs_name}" }
+                                                                            option {
+                                                                                value: "{bs_name}",
+                                                                                selected: current_bs == *bs_name,
+                                                                                "{bs_name}"
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
@@ -838,6 +940,9 @@ pub fn PropertiesPanel() -> Element {
                                                                     .map(|s| s.to_string()).unwrap_or_default();
                                                                 let mut show_conn_builder = use_signal(|| false);
                                                                 let is_builder_open = *show_conn_builder.read();
+                                                                let mut table_list: Signal<Vec<String>> = use_signal(|| Vec::new());
+                                                                let mut conn_status = use_signal(|| String::new());
+                                                                let tables = table_list.read().clone();
 
                                                                 rsx! {
                                                                     div { style: "font-weight: bold;", "SelectCmd" }
@@ -851,23 +956,21 @@ pub fn PropertiesPanel() -> Element {
                                                                     }
 
                                                                     div { style: "font-weight: bold;", "ConnStr" }
-                                                                    div { style: "display: flex; gap: 4px; align-items: center;",
-                                                                        input {
-                                                                            style: "flex: 1; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                                            value: "{cs}",
-                                                                            placeholder: "Data Source=...",
-                                                                            oninput: move |evt| {
-                                                                                state.update_control_property(cid, "ConnectionString", evt.value());
-                                                                            }
+                                                                    input {
+                                                                        style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
+                                                                        value: "{cs}",
+                                                                        placeholder: "Data Source=...",
+                                                                        oninput: move |evt| {
+                                                                            state.update_control_property(cid, "ConnectionString", evt.value());
                                                                         }
-                                                                        button {
-                                                                            style: "padding: 2px 8px; border: 1px solid #999; background: #f0f0f0; cursor: pointer; font-size: 12px; white-space: nowrap;",
-                                                                            title: "Connection String Builder",
-                                                                            onclick: move |_| {
-                                                                                show_conn_builder.set(!is_builder_open);
-                                                                            },
-                                                                            "..."
-                                                                        }
+                                                                    }
+
+                                                                    button {
+                                                                        style: "grid-column: 1 / -1; margin-top: 2px; width: 100%; padding: 4px 8px; border: 1px solid #0078d4; background: #0078d4; color: white; cursor: pointer; border-radius: 3px; font-size: 11px;",
+                                                                        onclick: move |_| {
+                                                                            show_conn_builder.set(!is_builder_open);
+                                                                        },
+                                                                        if is_builder_open { "▲ Hide Connection Builder" } else { "🔧 Connection String Builder..." }
                                                                     }
 
                                                                     // Connection String Builder panel
@@ -997,6 +1100,65 @@ pub fn PropertiesPanel() -> Element {
                                                                                     show_conn_builder.set(false);
                                                                                 },
                                                                                 "Build Connection String"
+                                                                            }
+                                                                        }
+                                                                    }
+
+                                                                    // Test Connection & Table picker
+                                                                    {
+                                                                        let status_text = conn_status.read().clone();
+                                                                        let status_bg = if status_text.starts_with('✓') { "#d4edda" } else { "#f8d7da" };
+                                                                        rsx! {
+                                                                            button {
+                                                                                style: "grid-column: 1 / -1; margin-top: 6px; width: 100%; padding: 4px 8px; border: 1px solid #28a745; background: #28a745; color: white; cursor: pointer; border-radius: 3px; font-size: 11px;",
+                                                                                onclick: move |_| {
+                                                                                    let form_opt4 = state.get_current_form();
+                                                                                    if let Some(form) = form_opt4.as_ref() {
+                                                                                        if let Some(ctrl) = form.get_control(cid) {
+                                                                                            let cs = ctrl.properties.get_string("ConnectionString")
+                                                                                                .unwrap_or("").to_string();
+                                                                                            if cs.is_empty() {
+                                                                                                conn_status.set("⚠ No connection string".to_string());
+                                                                                                return;
+                                                                                            }
+                                                                                            match irys_runtime::data_access::test_connection_and_list_tables(&cs) {
+                                                                                                Ok(tbl_list) => {
+                                                                                                    conn_status.set(format!("✓ Connected — {} tables found", tbl_list.len()));
+                                                                                                    table_list.set(tbl_list);
+                                                                                                }
+                                                                                                Err(e) => {
+                                                                                                    conn_status.set(format!("✗ {}", e));
+                                                                                                    table_list.set(Vec::new());
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                },
+                                                                                "⚡ Test Connection & Fetch Tables"
+                                                                            }
+
+                                                                            if !status_text.is_empty() {
+                                                                                div { style: "grid-column: 1 / -1; font-size: 10px; padding: 3px 6px; border-radius: 3px; margin-top: 2px; background: {status_bg};",
+                                                                                    "{status_text}"
+                                                                                }
+                                                                            }
+
+                                                                            if !tables.is_empty() {
+                                                                                div { style: "font-weight: bold; margin-top: 4px;", "Table" }
+                                                                                select {
+                                                                                    style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
+                                                                                    onchange: move |evt| {
+                                                                                        let tbl = evt.value();
+                                                                                        if !tbl.is_empty() {
+                                                                                            let select_cmd = format!("SELECT * FROM {}", tbl);
+                                                                                            state.update_control_property(cid, "SelectCommand", select_cmd);
+                                                                                        }
+                                                                                    },
+                                                                                    option { value: "", "— pick a table —" }
+                                                                                    for tbl_name in &tables {
+                                                                                        option { value: "{tbl_name}", "{tbl_name}" }
+                                                                                    }
+                                                                                }
                                                                             }
                                                                         }
                                                                     }

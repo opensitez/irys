@@ -315,6 +315,44 @@ pub fn extract_form_from_designer(class_decl: &ClassDecl) -> Option<Form> {
                     }
                 }
             }
+            // Handle DataBindings.Add calls:
+            // Me.txtName.DataBindings.Add("Text", Me.bs1, "Name")
+            // Parsed as ExpressionStatement(MethodCall(MemberAccess(MemberAccess(Me, ctrl), "DataBindings"), "Add", args))
+            Statement::ExpressionStatement(Expression::MethodCall(obj, method, args))
+                if method.as_str().eq_ignore_ascii_case("Add") =>
+            {
+                // Check if the object is Me.X.DataBindings
+                if let Expression::MemberAccess(inner, db_member) = obj.as_ref() {
+                    if db_member.as_str().eq_ignore_ascii_case("DataBindings") {
+                        if let Some((ctrl_name, true)) = extract_me_member_target(inner) {
+                            // args: ("PropertyName", Me.bindingSource, "ColumnName")
+                            if args.len() >= 3 {
+                                let prop_name = match &args[0] {
+                                    Expression::StringLiteral(s) => Some(s.clone()),
+                                    _ => None,
+                                };
+                                let bs_name = match &args[1] {
+                                    Expression::MemberAccess(inner2, member) if is_me(inner2) => {
+                                        Some(member.as_str().to_string())
+                                    }
+                                    Expression::StringLiteral(s) => Some(s.clone()),
+                                    _ => None,
+                                };
+                                let col_name = match &args[2] {
+                                    Expression::StringLiteral(s) => Some(s.clone()),
+                                    _ => None,
+                                };
+                                if let (Some(prop), Some(bs), Some(col)) = (prop_name, bs_name, col_name) {
+                                    if let Some(builder) = builders.get_mut(&ctrl_name) {
+                                        builder.extra_props.insert("DataBindings.Source".to_string(), bs);
+                                        builder.extra_props.insert(format!("DataBindings.{}", prop), col);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             // Me.Controls.Add(...), Me.SuspendLayout(), Me.ResumeLayout() -> skip
             Statement::ExpressionStatement(_) | Statement::Call { .. } => {}
             _ => {}

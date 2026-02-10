@@ -249,10 +249,10 @@ fn write_control(content: &mut String, control: &Control, indent_level: usize) -
         ControlType::Panel => "VB.PictureBox",
         ControlType::ListView => "MSComctlLib.ListView",
         ControlType::BindingNavigator => "VB.ToolBar",
-        ControlType::BindingSourceComponent => "VB.Data",
-        ControlType::DataSetComponent => "VB.Data",
-        ControlType::DataTableComponent => "VB.Data",
-        ControlType::DataAdapterComponent => "VB.Data",
+        ControlType::BindingSourceComponent => "VB.BindingSource",
+        ControlType::DataSetComponent => "VB.DataSet",
+        ControlType::DataTableComponent => "VB.DataTable",
+        ControlType::DataAdapterComponent => "VB.DataAdapter",
     };
 
     content.push_str(&format!("{}Begin {} {} \n", indent, vb_type, control.name));
@@ -330,6 +330,32 @@ fn write_control(content: &mut String, control: &Control, indent_level: usize) -
         ControlType::TreeView => {
             if let Some(sep) = control.properties.get_string("PathSeparator") {
                 content.push_str(&format!("{}PathSeparator   =   \"{}\"\n", inner_indent, escape_quotes(sep)));
+            }
+        }
+        ControlType::DataAdapterComponent => {
+            if let Some(cs) = control.properties.get_string("ConnectionString") {
+                content.push_str(&format!("{}ConnectionString =   \"{}\"\n", inner_indent, escape_quotes(cs)));
+            }
+            if let Some(sc) = control.properties.get_string("SelectCommand") {
+                content.push_str(&format!("{}SelectCommand   =   \"{}\"\n", inner_indent, escape_quotes(sc)));
+            }
+        }
+        ControlType::BindingSourceComponent => {
+            if let Some(ds) = control.properties.get_string("DataSource") {
+                content.push_str(&format!("{}DataSource      =   \"{}\"\n", inner_indent, escape_quotes(ds)));
+            }
+            if let Some(dm) = control.properties.get_string("DataMember") {
+                content.push_str(&format!("{}DataMember      =   \"{}\"\n", inner_indent, escape_quotes(dm)));
+            }
+        }
+        ControlType::DataSetComponent => {
+            if let Some(dsn) = control.properties.get_string("DataSetName") {
+                content.push_str(&format!("{}DataSetName     =   \"{}\"\n", inner_indent, escape_quotes(dsn)));
+            }
+        }
+        ControlType::DataTableComponent => {
+            if let Some(tn) = control.properties.get_string("TableName") {
+                content.push_str(&format!("{}TableName       =   \"{}\"\n", inner_indent, escape_quotes(tn)));
             }
         }
         _ => {}

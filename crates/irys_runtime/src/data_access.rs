@@ -787,6 +787,33 @@ pub fn get_global_dam() -> Arc<Mutex<DataAccessManager>> {
     }).clone()
 }
 
+/// Fetch column names for a given SELECT query against a connection string.
+/// Runs the query with LIMIT 0 (or wraps in a subquery) to get schema only.
+pub fn fetch_columns_for_query(conn_str: &str, select_cmd: &str) -> Result<Vec<String>, String> {
+    if conn_str.is_empty() || select_cmd.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dam_arc = get_global_dam();
+    let mut dam = dam_arc.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let conn_id = dam.open_connection(conn_str)?;
+
+    // Wrap the SELECT in a LIMIT 0 subquery to fetch column names without data
+    let schema_sql = format!("SELECT * FROM ({}) AS __cols LIMIT 0", select_cmd.trim().trim_end_matches(';'));
+    let rs_id = dam.execute_reader(conn_id, &schema_sql)
+        .or_else(|_| {
+            // Fallback: try adding LIMIT 0 directly (simpler queries)
+            let fallback = format!("{} LIMIT 0", select_cmd.trim().trim_end_matches(';'));
+            dam.execute_reader(conn_id, &fallback)
+        })?;
+    let columns: Vec<String> = if let Some(rs) = dam.recordsets.get(&rs_id) {
+        rs.columns.clone()
+    } else {
+        Vec::new()
+    };
+    dam.recordsets.remove(&rs_id);
+    Ok(columns)
+}
+
 /// Test a connection string and return a list of table names.
 /// This is a convenience function for the editor's properties panel.
 /// Returns Ok(vec of table names) on success or Err(error message).
