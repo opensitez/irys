@@ -133,7 +133,6 @@ pub fn array_fn(args: &[Value]) -> Result<Value, RuntimeError> {
 
 /// InputBox(prompt[, title[, default]]) - Shows native input dialog and returns user input
 pub fn inputbox_fn(args: &[Value]) -> Result<Value, RuntimeError> {
-    use std::process::Command;
     
     if args.is_empty() || args.len() > 3 {
         return Err(RuntimeError::Custom("InputBox requires 1 to 3 arguments".to_string()));
@@ -231,4 +230,49 @@ fn show_native_input_dialog(prompt: &str, title: &str, default_value: &str) -> O
     {
         None
     }
+}
+
+/// IsEmpty(expression) - Returns True if value is empty (uninitialized Variant or empty string)
+pub fn isempty_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("IsEmpty requires exactly one argument".to_string()));
+    }
+    let result = match &args[0] {
+        Value::Nothing => true,
+        Value::String(s) => s.is_empty(),
+        _ => false,
+    };
+    Ok(Value::Boolean(result))
+}
+
+/// IsObject(expression) - Returns True if value is an object reference
+pub fn isobject_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("IsObject requires exactly one argument".to_string()));
+    }
+    let result = matches!(&args[0], Value::Object(_) | Value::Collection(_));
+    Ok(Value::Boolean(result))
+}
+
+/// IsError(expression) - Returns True if value is an error value
+pub fn iserror_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("IsError requires exactly one argument".to_string()));
+    }
+    // In VB, errors are typically represented as special Variant values
+    // For now, we'll check if it's a string that looks like an error
+    let result = match &args[0] {
+        Value::String(s) => s.to_lowercase().contains("error"),
+        _ => false,
+    };
+    Ok(Value::Boolean(result))
+}
+
+/// IsDBNull(expression) - Returns True if value is DBNull (used with database operations)
+pub fn isdbnull_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("IsDBNull requires exactly one argument".to_string()));
+    }
+    // DBNull is typically represented as Nothing in our system
+    Ok(Value::Boolean(matches!(&args[0], Value::Nothing)))
 }

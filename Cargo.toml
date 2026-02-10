@@ -31,6 +31,9 @@ serde_json = "1.0"
 uuid = { version = "1.10", features = ["serde", "v4"] }
 thiserror = "1.0"
 
+# Dialog libraries
+rfd = "0.14"
+
 # Internal crates
 irys_parser = { path = "crates/irys_parser" }
 irys_runtime = { path = "crates/irys_runtime" }

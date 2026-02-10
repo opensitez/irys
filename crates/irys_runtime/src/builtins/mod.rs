@@ -8,6 +8,9 @@ pub mod datetime_fns;
 pub mod misc_fns;
 pub mod console_fns;
 pub mod dialogs;
+pub mod file_fns;
+pub mod interaction_fns;
+pub mod financial_fns;
 
 pub use msgbox::*;
 pub use string_fns::*;
@@ -19,3 +22,6 @@ pub use datetime_fns::*;
 pub use misc_fns::*;
 pub use console_fns::*;
 pub use dialogs::*;
+pub use file_fns::*;
+pub use interaction_fns::*;
+pub use financial_fns::*;

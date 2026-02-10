@@ -239,3 +239,121 @@ pub fn formatpercent_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     let decimals = if args.len() >= 2 { args[1].as_integer()?.max(0) as usize } else { 2 };
     Ok(Value::String(format!("{:.prec$}%", d * 100.0, prec = decimals)))
 }
+
+/// CObj(expression) - Convert to Object
+pub fn cobj_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("CObj requires exactly one argument".to_string()));
+    }
+    // In VB, CObj just returns the value as an Object type
+    Ok(args[0].clone())
+}
+
+/// CShort(expression) - Convert to Short (16-bit integer)
+pub fn cshort_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("CShort requires exactly one argument".to_string()));
+    }
+    let val = args[0].as_integer()? as i16;
+    Ok(Value::Integer(val as i32))
+}
+
+/// CUShort(expression) - Convert to UShort (16-bit unsigned integer)
+pub fn cushort_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("CUShort requires exactly one argument".to_string()));
+    }
+    let val = args[0].as_integer()?.max(0) as u16;
+    Ok(Value::Integer(val as i32))
+}
+
+/// CUInt(expression) - Convert to UInteger (32-bit unsigned integer)
+pub fn cuint_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("CUInt requires exactly one argument".to_string()));
+    }
+    let val = args[0].as_integer()?.max(0) as u32;
+    Ok(Value::Long(val as i64))
+}
+
+/// CULng(expression) - Convert to ULong (64-bit unsigned integer)
+pub fn culng_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("CULng requires exactly one argument".to_string()));
+    }
+    let val = args[0].as_long()?.max(0) as u64;
+    Ok(Value::Long(val as i64))
+}
+
+/// AscW(string) - Returns Unicode code point of first character
+pub fn ascw_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("AscW requires exactly one argument".to_string()));
+    }
+    let s = args[0].as_string();
+    if let Some(ch) = s.chars().next() {
+        Ok(Value::Integer(ch as u32 as i32))
+    } else {
+        Err(RuntimeError::Custom("AscW: empty string".to_string()))
+    }
+}
+
+/// ChrW(code) - Returns Unicode character from code point
+pub fn chrw_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("ChrW requires exactly one argument".to_string()));
+    }
+    let code = args[0].as_integer()? as u32;
+    if let Some(ch) = char::from_u32(code) {
+        Ok(Value::String(ch.to_string()))
+    } else {
+        Err(RuntimeError::Custom(format!("ChrW: invalid Unicode code point {}", code)))
+    }
+}
+
+/// RGB(red, green, blue) - Returns color value from RGB components
+pub fn rgb_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 3 {
+        return Err(RuntimeError::Custom("RGB requires exactly 3 arguments".to_string()));
+    }
+    let r = (args[0].as_integer()? & 0xFF) as u32;
+    let g = (args[1].as_integer()? & 0xFF) as u32;
+    let b = (args[2].as_integer()? & 0xFF) as u32;
+    
+    // VB6 color format: &H00BBGGRR (blue in high byte, red in low byte)
+    let color = (b << 16) | (g << 8) | r;
+    Ok(Value::Integer(color as i32))
+}
+
+/// QBColor(color_number) - Returns color from QB color number (0-15)
+pub fn qbcolor_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("QBColor requires exactly one argument".to_string()));
+    }
+    let color_num = args[0].as_integer()?;
+    
+    // QBasic color palette (16 colors)
+    let rgb = match color_num {
+        0 => (0, 0, 0),         // Black
+        1 => (0, 0, 128),       // Blue
+        2 => (0, 128, 0),       // Green
+        3 => (0, 128, 128),     // Cyan
+        4 => (128, 0, 0),       // Red
+        5 => (128, 0, 128),     // Magenta
+        6 => (128, 128, 0),     // Brown/Yellow
+        7 => (192, 192, 192),   // Light Gray
+        8 => (128, 128, 128),   // Dark Gray
+        9 => (0, 0, 255),       // Bright Blue
+        10 => (0, 255, 0),      // Bright Green
+        11 => (0, 255, 255),    // Bright Cyan
+        12 => (255, 0, 0),      // Bright Red
+        13 => (255, 0, 255),    // Bright Magenta
+        14 => (255, 255, 0),    // Bright Yellow
+        15 => (255, 255, 255),  // White
+        _ => return Err(RuntimeError::Custom(format!("QBColor: invalid color number {}", color_num))),
+    };
+    
+    // Return as VB6 color format
+    let color = (rgb.2 << 16) | (rgb.1 << 8) | rgb.0;
+    Ok(Value::Integer(color as i32))
+}

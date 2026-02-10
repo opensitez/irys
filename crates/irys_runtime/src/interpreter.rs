@@ -1813,13 +1813,82 @@ impl Interpreter {
 
             // Misc utility functions
             "doevents" => return doevents_fn(&arg_values),
+            "isnullorempty" | "string.isnullorempty" => return isnullorempty_fn(&arg_values),
+            "strdup" => return strdup_fn(&arg_values),
+
+            // Color functions (moved from misc to conversion_fns)
             "rgb" => return rgb_fn(&arg_values),
             "qbcolor" => return qbcolor_fn(&arg_values),
-            "environ" | "environ$" => return environ_fn(&arg_values),
-            "isnullorempty" | "string.isnullorempty" => return isnullorempty_fn(&arg_values),
+
+            // String functions additions
+            "strconv" => return strconv_fn(&arg_values),
+            "lset" | "lset$" => return lset_fn(&arg_values),
+            "rset" | "rset$" => return rset_fn(&arg_values),
+            "filter" => return filter_fn(&arg_values),
+            "formatdatetime" => return formatdatetime_fn(&arg_values),
+
+            // Conversion functions additions
+            "cobj" => return cobj_fn(&arg_values),
+            "cshort" => return cshort_fn(&arg_values),
+            "cushort" => return cushort_fn(&arg_values),
+            "cuint" => return cuint_fn(&arg_values),
+            "culng" => return culng_fn(&arg_values),
+            "ascw" => return ascw_fn(&arg_values),
+            "chrw" | "chrw$" => return chrw_fn(&arg_values),
+
+            // DateTime functions additions
             "dateadd" => return dateadd_fn(&arg_values),
             "datediff" => return datediff_fn(&arg_values),
-            "strdup" => return strdup_fn(&arg_values),
+            "datepart" => return datepart_fn(&arg_values),
+            "dateserial" => return dateserial_fn(&arg_values),
+            "timeserial" => return timeserial_fn(&arg_values),
+            "datevalue" => return datevalue_fn(&arg_values),
+            "timevalue" => return timevalue_fn(&arg_values),
+            "monthname" => return monthname_fn(&arg_values),
+            "weekdayname" => return weekdayname_fn(&arg_values),
+            "weekday" => return weekday_fn(&arg_values),
+
+            // Info functions additions
+            "isempty" => return isempty_fn(&arg_values),
+            "isobject" => return isobject_fn(&arg_values),
+            "iserror" => return iserror_fn(&arg_values),
+            "isdbnull" => return isdbnull_fn(&arg_values),
+
+            // File functions
+            "dir" | "dir$" => return dir_fn(&arg_values),
+            "filecopy" => return filecopy_fn(&arg_values),
+            "kill" => return kill_fn(&arg_values),
+            "name" => return name_fn(&arg_values),
+            "getattr" => return getattr_fn(&arg_values),
+            "setattr" => return setattr_fn(&arg_values),
+            "filedatetime" => return filedatetime_fn(&arg_values),
+            "filelen" => return filelen_fn(&arg_values),
+            "curdir" | "curdir$" => return curdir_fn(&arg_values),
+            "chdir" => return chdir_fn(&arg_values),
+            "mkdir" => return mkdir_fn(&arg_values),
+            "rmdir" => return rmdir_fn(&arg_values),
+            "freefile" => return freefile_fn(&arg_values),
+            "fileexists" | "file.exists" => return file_exists_fn(&arg_values),
+
+            // Interaction functions
+            "beep" => return beep_fn(&arg_values),
+            "shell" => return shell_fn(&arg_values),
+            "environ" | "environ$" => return environ_fn(&arg_values),
+            "command" | "command$" => return command_fn(&arg_values),
+            "sendkeys" => return sendkeys_fn(&arg_values),
+            "appactivate" => return appactivate_fn(&arg_values),
+
+            // Financial functions
+            "pmt" => return pmt_fn(&arg_values),
+            "fv" => return fv_fn(&arg_values),
+            "pv" => return pv_fn(&arg_values),
+            "nper" => return nper_fn(&arg_values),
+            "rate" => return rate_fn(&arg_values),
+            "ipmt" => return ipmt_fn(&arg_values),
+            "ppmt" => return ppmt_fn(&arg_values),
+            "ddb" => return ddb_fn(&arg_values),
+            "sln" => return sln_fn(&arg_values),
+            "syd" => return syd_fn(&arg_values),
 
             // Debug/Output
             "debug.print" | "console.writeline" | "console.write" => {

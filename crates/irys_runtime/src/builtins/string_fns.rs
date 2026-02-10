@@ -434,7 +434,7 @@ pub fn filter_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     
     let match_str = args[1].as_string();
     let include = if args.len() >= 3 {
-        args[2].as_boolean()?
+        args[2].as_bool()?
     } else {
         true
     };
