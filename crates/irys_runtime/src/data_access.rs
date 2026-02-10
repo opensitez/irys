@@ -419,6 +419,65 @@ impl DataAccessManager {
     pub fn get_backend(&self, conn_id: u64) -> Option<DbBackend> {
         self.connections.get(&conn_id).map(|c| c.backend.clone())
     }
+
+    // ===== Transactions =====
+
+    /// Begin a transaction.  Returns a transaction ID.
+    pub fn begin_transaction(&mut self, conn_id: u64) -> Result<u64, String> {
+        let conn = self.connections.get(&conn_id)
+            .ok_or_else(|| format!("Connection {} not found", conn_id))?;
+        self.runtime.block_on(async {
+            sqlx::query("BEGIN").execute(&conn.pool).await
+                .map_err(|e| format!("BEGIN error: {}", e))
+        })?;
+        // Use conn_id as transaction id (one active tx per connection)
+        Ok(conn_id)
+    }
+
+    /// Commit a transaction.
+    pub fn commit(&mut self, conn_id: u64) -> Result<(), String> {
+        let conn = self.connections.get(&conn_id)
+            .ok_or_else(|| format!("Connection {} not found", conn_id))?;
+        self.runtime.block_on(async {
+            sqlx::query("COMMIT").execute(&conn.pool).await
+                .map_err(|e| format!("COMMIT error: {}", e))
+        })?;
+        Ok(())
+    }
+
+    /// Rollback a transaction.
+    pub fn rollback(&mut self, conn_id: u64) -> Result<(), String> {
+        let conn = self.connections.get(&conn_id)
+            .ok_or_else(|| format!("Connection {} not found", conn_id))?;
+        self.runtime.block_on(async {
+            sqlx::query("ROLLBACK").execute(&conn.pool).await
+                .map_err(|e| format!("ROLLBACK error: {}", e))
+        })?;
+        Ok(())
+    }
+
+    // ===== Parameterised queries =====
+
+    /// Substitute `@param` placeholders in SQL with literal values.
+    /// Parameters is a list of (name, value) where name starts with `@`.
+    /// Values are escaped for safe embedding.
+    pub fn substitute_params(sql: &str, params: &[(String, String)]) -> String {
+        let mut result = sql.to_string();
+        // Sort by name length descending so @param10 is replaced before @param1
+        let mut sorted: Vec<&(String, String)> = params.iter().collect();
+        sorted.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        for (name, value) in sorted {
+            let escaped = value.replace('\'', "''");
+            // Try to keep numeric values unquoted
+            let replacement = if value.parse::<f64>().is_ok() || value.eq_ignore_ascii_case("null") {
+                value.clone()
+            } else {
+                format!("'{}'", escaped)
+            };
+            result = result.replace(name.as_str(), &replacement);
+        }
+        result
+    }
 }
 
 /// Result of Execute() — either a recordset or rows-affected count.
