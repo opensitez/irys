@@ -301,3 +301,14 @@ pub fn isdbnull_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     // DBNull is typically represented as Nothing in our system
     Ok(Value::Boolean(matches!(&args[0], Value::Nothing)))
 }
+
+/// IsNull(expression) - Returns True if value is Null
+/// In VB6, Null is different from Nothing - it represents an uninitialized or invalid database value
+pub fn isnull_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("IsNull requires exactly one argument".to_string()));
+    }
+    // In our system, we treat Null and Nothing as similar
+    // A more complete implementation might have a separate Null variant
+    Ok(Value::Boolean(matches!(&args[0], Value::Nothing)))
+}

@@ -507,7 +507,7 @@ pub fn filelen_fn(args: &[Value]) -> Result<Value, RuntimeError> {
 }
 
 /// CurDir([drive]) - Returns current directory
-pub fn curdir_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+pub fn curdir_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
     match std::env::current_dir() {
         Ok(path) => Ok(Value::String(path.to_string_lossy().to_string())),
         Err(e) => Err(RuntimeError::Custom(format!("CurDir error: {}", e))),
@@ -554,7 +554,7 @@ pub fn rmdir_fn(args: &[Value]) -> Result<Value, RuntimeError> {
 }
 
 /// FreeFile() - Returns next available file number
-pub fn freefile_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+pub fn freefile_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
     use std::sync::atomic::{AtomicI32, Ordering};
     
     static FILE_NUMBER: AtomicI32 = AtomicI32::new(1);

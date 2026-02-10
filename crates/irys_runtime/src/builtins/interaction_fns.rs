@@ -2,7 +2,7 @@ use crate::value::{RuntimeError, Value};
 use std::process::Command;
 
 /// Beep() - Makes a beep sound
-pub fn beep_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+pub fn beep_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
     #[cfg(target_os = "macos")]
     {
         // Use afplay to play system beep
@@ -91,7 +91,7 @@ pub fn environ_fn(args: &[Value]) -> Result<Value, RuntimeError> {
 }
 
 /// Command() - Returns command line arguments
-pub fn command_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+pub fn command_fn(_args: &[Value]) -> Result<Value, RuntimeError> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     Ok(Value::String(args.join(" ")))
 }

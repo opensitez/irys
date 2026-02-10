@@ -357,3 +357,26 @@ pub fn qbcolor_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     let color = (rgb.2 << 16) | (rgb.1 << 8) | rgb.0;
     Ok(Value::Integer(color as i32))
 }
+
+/// CCur(expression) - Convert to Currency type (stored as Double)
+pub fn ccur_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("CCur requires exactly one argument".to_string()));
+    }
+    // Currency type in VB has 4 decimal places precision
+    // We'll store it as a Double but format appropriately
+    let value = args[0].as_double()?;
+    // Round to 4 decimal places for currency precision
+    let rounded = (value * 10000.0).round() / 10000.0;
+    Ok(Value::Double(rounded))
+}
+
+/// CVar(expression) - Convert to Variant type (essentially returns the value as-is)
+pub fn cvar_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("CVar requires exactly one argument".to_string()));
+    }
+    // In VB, CVar converts to Variant type, which accepts any value
+    // Since our Value enum is already variant-like, just return the value
+    Ok(args[0].clone())
+}

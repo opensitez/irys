@@ -1,6 +1,6 @@
 use crate::value::{RuntimeError, Value};
 use std::time::SystemTime;
-use chrono::{Datelike, Timelike, Weekday};
+use chrono::{Datelike, Timelike};
 
 fn get_local_time() -> (i32, i32, i32, i32, i32, i32) {
     // Get seconds since epoch and compute date/time components

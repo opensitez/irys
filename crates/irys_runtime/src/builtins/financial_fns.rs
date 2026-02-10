@@ -263,7 +263,7 @@ pub fn ddb_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     let mut book_value = cost;
     let mut depreciation = 0.0;
     
-    for p in 1..=(period as i32) {
+    for _p in 1..=(period as i32) {
         let current_depreciation = book_value * rate;
         let max_depreciation = book_value - salvage;
         
@@ -276,7 +276,6 @@ pub fn ddb_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         book_value -= depreciation;
         
         if book_value < salvage {
-            book_value = salvage;
             break;
         }
     }

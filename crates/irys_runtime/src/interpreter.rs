@@ -1724,8 +1724,7 @@ impl Interpreter {
             "instrrev" => return instrrev_fn(&arg_values),
             "replace" => return replace_fn(&arg_values),
             "chr" | "chr$" => return chr_fn(&arg_values),
-            "chrw" => return chr_fn(&arg_values),
-            "asc" | "ascw" => return asc_fn(&arg_values),
+            "asc" => return asc_fn(&arg_values),
             "split" => return split_fn(&arg_values),
             "join" => return join_fn(&arg_values),
             "strreverse" => return strreverse_fn(&arg_values),
@@ -2194,15 +2193,11 @@ impl Interpreter {
             } else if let Some(exprs) = arg_exprs {
                 if i < exprs.len() {
                     val = self.evaluate_expr(&exprs[i])?;
-                    
-                    let is_byref = param.pass_type == irys_parser::ast::decl::ParameterPassType::ByRef; 
-                    eprintln!("DEBUG: Param {} is_byref: {}", param.name.as_str(), is_byref);
-                    
+                    let is_byref = param.pass_type == irys_parser::ast::decl::ParameterPassType::ByRef;
                     if is_byref {
                         // Check if argument is a variable we can write back to
                         match &exprs[i] {
                             Expression::Variable(name) => {
-                                eprintln!("DEBUG: Enabling writeback for {} -> {}", name.as_str(), param.name.as_str());
                                 byref_writebacks.push((name.as_str().to_string(), param.name.as_str().to_string()));
                             }
                             _ => {}
@@ -2232,7 +2227,6 @@ impl Interpreter {
         if !byref_writebacks.is_empty() {
              for (caller_var, param_name) in byref_writebacks {
                  if let Ok(new_val) = self.env.get(&param_name) {
-                     eprintln!("DEBUG: Capturing writeback value for {}: {:?}", caller_var, new_val);
                      final_writebacks.push((caller_var, new_val));
                  }
              }
@@ -2244,7 +2238,6 @@ impl Interpreter {
         
         // Apply writebacks in restored scope
         for (var_name, val) in final_writebacks {
-            eprintln!("DEBUG: Writing back {} = {:?}", var_name, val);
             let _ = self.env.set(&var_name, val);
         }
 

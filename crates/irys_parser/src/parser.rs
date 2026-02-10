@@ -151,16 +151,17 @@ fn parse_const_statement(pair: Pair<Rule>) -> ParseResult<ConstDecl> {
 
     for p in inner {
         match p.as_rule() {
-            Rule::identifier => {
-                // First identifier could be visibility or constant name
-                let text = p.as_str().to_lowercase();
-                if text == "public" {
-                    visibility = Visibility::Public;
-                } else if text == "private" {
-                    visibility = Visibility::Private;
-                } else {
-                    name = Identifier::new(p.as_str());
+            Rule::visibility_modifier => {
+                let s = p.as_str().to_lowercase();
+                match s.as_str() {
+                    "public" => visibility = Visibility::Public,
+                    "private" => visibility = Visibility::Private,
+                    "friend" => visibility = Visibility::Friend,
+                    _ => {}
                 }
+            }
+            Rule::identifier => {
+                name = Identifier::new(p.as_str());
             }
             Rule::type_name => {
                 const_type = VBType::from_str(p.as_str());
@@ -195,13 +196,11 @@ fn parse_redim_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
 
     for p in inner {
         match p.as_rule() {
+            Rule::preserve_keyword => {
+                preserve = true;
+            }
             Rule::identifier => {
-                let text = p.as_str().to_lowercase();
-                if text == "preserve" {
-                    preserve = true;
-                } else {
-                    array = Identifier::new(p.as_str());
-                }
+                array = Identifier::new(p.as_str());
             }
             Rule::array_bounds => {
                 bounds = p.into_inner()
@@ -221,88 +220,6 @@ fn parse_redim_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
 
 
 
-fn parse_case_block(pair: Pair<Rule>) -> ParseResult<CaseBlock> {
-    let inner = pair.into_inner();
-    let mut conditions = Vec::new();
-    let mut body = Vec::new();
-
-    for p in inner {
-        match p.as_rule() {
-            Rule::case_conditions => {
-                conditions = p.into_inner()
-                    .map(|cond| parse_case_condition(cond))
-                    .collect::<Result<_, _>>()?;
-            }
-            Rule::statement_line => {
-                for stmt_pair in p.into_inner() {
-                    if stmt_pair.as_rule() != Rule::NEWLINE && stmt_pair.as_rule() != Rule::EOI {
-                        body.push(parse_statement(stmt_pair)?);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(CaseBlock { conditions, body })
-}
-
-fn parse_case_condition(pair: Pair<Rule>) -> ParseResult<CaseCondition> {
-    let mut inner = pair.into_inner();
-    let first = inner.next().unwrap();
-
-    match first.as_rule() {
-        Rule::comp_op => {
-            // Case Is > 10
-            let op = parse_comp_op(&first)?;
-            let expr = parse_expression(inner.next().unwrap())?;
-            Ok(CaseCondition::Comparison { op, expr })
-        }
-        Rule::expression => {
-            // Could be: Case 5 or Case 1 To 10
-            let from_expr = parse_expression(first)?;
-            if let Some(next) = inner.next() {
-                // Case 1 To 10
-                let to_expr = parse_expression(next)?;
-                Ok(CaseCondition::Range {
-                    from: from_expr,
-                    to: to_expr,
-                })
-            } else {
-                // Case 5
-                Ok(CaseCondition::Value(from_expr))
-            }
-        }
-        _ => Err(ParseError::Custom("Invalid case condition".to_string())),
-    }
-}
-
-fn parse_case_else(pair: Pair<Rule>) -> ParseResult<Vec<Statement>> {
-    let mut statements = Vec::new();
-    for p in pair.into_inner() {
-        if p.as_rule() == Rule::statement_line {
-            for stmt_pair in p.into_inner() {
-                if stmt_pair.as_rule() != Rule::NEWLINE && stmt_pair.as_rule() != Rule::EOI {
-                    statements.push(parse_statement(stmt_pair)?);
-                }
-            }
-        }
-    }
-    Ok(statements)
-}
-
-fn parse_comp_op(pair: &Pair<Rule>) -> ParseResult<CompOp> {
-    let op_str = pair.as_str();
-    match op_str {
-        "=" => Ok(CompOp::Equal),
-        "<>" => Ok(CompOp::NotEqual),
-        "<" => Ok(CompOp::LessThan),
-        "<=" => Ok(CompOp::LessThanOrEqual),
-        ">" => Ok(CompOp::GreaterThan),
-        ">=" => Ok(CompOp::GreaterThanOrEqual),
-        _ => Err(ParseError::Custom(format!("Unknown comparison operator: {}", op_str))),
-    }
-}
 
 fn parse_sub_decl(pair: Pair<Rule>) -> ParseResult<SubDecl> {
     let inner = pair.into_inner();
@@ -314,58 +231,61 @@ fn parse_sub_decl(pair: Pair<Rule>) -> ParseResult<SubDecl> {
     let mut is_async = false;
 
     for p in inner {
-        match p.as_str().to_lowercase().as_str() {
-            "public" => visibility = Visibility::Public,
-            "private" => visibility = Visibility::Private,
-            "async" => is_async = true,
-            _ => {
-                match p.as_rule() {
-                    Rule::sub_name => name = Identifier::new(p.as_str()),
-                    Rule::param_list => parameters = parse_param_list(p)?,
-                    Rule::statement | Rule::statement_line => {
-                        for stmt_pair in p.into_inner() {
-                            if stmt_pair.as_rule() == Rule::NEWLINE || stmt_pair.as_rule() == Rule::EOI {
-                                continue;
-                            }
-                            body.push(parse_statement(stmt_pair)?);
-                        }
-                    }
-                    Rule::sub_block_body => {
-                        body.extend(parse_block(p)?);
-                    }
-                    Rule::sub_inline_body => {
-                        for stmt_pair in p.into_inner() {
-                            match stmt_pair.as_rule() {
-                                Rule::statement_line => {
-                                    for inner in stmt_pair.into_inner() {
-                                        if inner.as_rule() == Rule::NEWLINE || inner.as_rule() == Rule::EOI {
-                                            continue;
-                                        }
-                                        body.push(parse_statement(inner)?);
-                                    }
-                                }
-                                Rule::sub_end | Rule::NEWLINE | Rule::EOI => {}
-                                _ => {
-                                    body.push(parse_statement(stmt_pair)?);
-                                }
-                            }
-                        }
-                    }
-                    Rule::handles_clause => {
-                        let mut handle_list = Vec::new();
-                        for hp in p.into_inner() {
-                            if hp.as_rule() == Rule::dotted_identifier {
-                                handle_list.push(hp.as_str().to_string());
-                            }
-                        }
-                        if !handle_list.is_empty() {
-                            handles = Some(handle_list);
-                        }
-                    }
-                    Rule::NEWLINE | Rule::sub_end | Rule::func_end | Rule::if_end | Rule::for_end | Rule::while_end | Rule::do_end | Rule::class_end => {}
+        match p.as_rule() {
+            Rule::visibility_modifier => {
+                let s = p.as_str().to_lowercase();
+                match s.as_str() {
+                    "public" => visibility = Visibility::Public,
+                    "private" => visibility = Visibility::Private,
+                    "friend" => visibility = Visibility::Friend,
                     _ => {}
                 }
             }
+            Rule::async_kw => is_async = true,
+            Rule::sub_modifier_keyword => {} // Handled if needed
+            Rule::sub_name => name = Identifier::new(p.as_str()),
+            Rule::param_list => parameters = parse_param_list(p)?,
+            Rule::statement | Rule::statement_line => {
+                for stmt_pair in p.into_inner() {
+                    if stmt_pair.as_rule() == Rule::NEWLINE || stmt_pair.as_rule() == Rule::EOI {
+                        continue;
+                    }
+                    body.push(parse_statement(stmt_pair)?);
+                }
+            }
+            Rule::sub_block_body => {
+                body.extend(parse_block(p)?);
+            }
+            Rule::sub_inline_body => {
+                for stmt_pair in p.into_inner() {
+                    match stmt_pair.as_rule() {
+                        Rule::statement_line => {
+                            for inner in stmt_pair.into_inner() {
+                                if inner.as_rule() == Rule::NEWLINE || inner.as_rule() == Rule::EOI {
+                                    continue;
+                                }
+                                body.push(parse_statement(inner)?);
+                            }
+                        }
+                        Rule::sub_end | Rule::NEWLINE | Rule::EOI => {}
+                        _ => {
+                            body.push(parse_statement(stmt_pair)?);
+                        }
+                    }
+                }
+            }
+            Rule::handles_clause => {
+                let mut handle_list = Vec::new();
+                for hp in p.into_inner() {
+                    if hp.as_rule() == Rule::dotted_identifier {
+                        handle_list.push(hp.as_str().to_string());
+                    }
+                }
+                if !handle_list.is_empty() {
+                    handles = Some(handle_list);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -389,48 +309,50 @@ fn parse_function_decl(pair: Pair<Rule>) -> ParseResult<FunctionDecl> {
     let mut is_async = false;
 
     for p in inner {
-        match p.as_str().to_lowercase().as_str() {
-            "public" => visibility = Visibility::Public,
-            "private" => visibility = Visibility::Private,
-            "async" => is_async = true,
-            _ => {
-                match p.as_rule() {
-                    Rule::identifier => name = Identifier::new(p.as_str()),
-                    Rule::param_list => parameters = parse_param_list(p)?,
-                    Rule::type_name => return_type = Some(VBType::from_str(p.as_str())),
-                    Rule::statement | Rule::statement_line => {
-                        for stmt_pair in p.into_inner() {
-                            if stmt_pair.as_rule() == Rule::NEWLINE || stmt_pair.as_rule() == Rule::EOI {
-                                continue;
-                            }
-                            body.push(parse_statement(stmt_pair)?);
-                        }
-                    }
-                    Rule::func_block_body => {
-                        body.extend(parse_block(p)?);
-                    }
-                    Rule::func_inline_body => {
-                        for stmt_pair in p.into_inner() {
-                            match stmt_pair.as_rule() {
-                                Rule::statement_line => {
-                                    for inner in stmt_pair.into_inner() {
-                                        if inner.as_rule() == Rule::NEWLINE || inner.as_rule() == Rule::EOI {
-                                            continue;
-                                        }
-                                        body.push(parse_statement(inner)?);
-                                    }
-                                }
-                                Rule::func_end | Rule::NEWLINE | Rule::EOI => {}
-                                _ => {
-                                    body.push(parse_statement(stmt_pair)?);
-                                }
-                            }
-                        }
-                    }
-                    Rule::NEWLINE | Rule::sub_end | Rule::func_end | Rule::if_end | Rule::for_end | Rule::while_end | Rule::do_end | Rule::class_end => {}
+        match p.as_rule() {
+            Rule::visibility_modifier => {
+                let s = p.as_str().to_lowercase();
+                match s.as_str() {
+                    "public" => visibility = Visibility::Public,
+                    "private" => visibility = Visibility::Private,
+                    "friend" => visibility = Visibility::Friend,
                     _ => {}
                 }
             }
+            Rule::async_kw => is_async = true,
+            Rule::identifier => name = Identifier::new(p.as_str()),
+            Rule::param_list => parameters = parse_param_list(p)?,
+            Rule::type_name => return_type = Some(VBType::from_str(p.as_str())),
+            Rule::statement | Rule::statement_line => {
+                for stmt_pair in p.into_inner() {
+                    if stmt_pair.as_rule() == Rule::NEWLINE || stmt_pair.as_rule() == Rule::EOI {
+                        continue;
+                    }
+                    body.push(parse_statement(stmt_pair)?);
+                }
+            }
+            Rule::func_block_body => {
+                body.extend(parse_block(p)?);
+            }
+            Rule::func_inline_body => {
+                for stmt_pair in p.into_inner() {
+                    match stmt_pair.as_rule() {
+                        Rule::statement_line => {
+                            for inner in stmt_pair.into_inner() {
+                                if inner.as_rule() == Rule::NEWLINE || inner.as_rule() == Rule::EOI {
+                                    continue;
+                                }
+                                body.push(parse_statement(inner)?);
+                            }
+                        }
+                        Rule::func_end | Rule::NEWLINE | Rule::EOI => {}
+                        _ => {
+                            body.push(parse_statement(stmt_pair)?);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -598,18 +520,18 @@ fn parse_parameter(pair: Pair<Rule>) -> ParseResult<Parameter> {
     let mut param_type = None;
 
     for p in inner {
-        match p.as_str().to_lowercase().as_str() {
-            "byval" => pass_type = ParameterPassType::ByVal,
-            "byref" => pass_type = ParameterPassType::ByRef,
-            "optional" => {} // Skip Optional keyword
-            _ => {
-                match p.as_rule() {
-                    Rule::identifier => name = Identifier::new(p.as_str()),
-                    Rule::type_name => param_type = Some(VBType::from_str(p.as_str())),
-                    Rule::expression => {} // Skip default value
-                    _ => {}
+        match p.as_rule() {
+            Rule::pass_type_keyword => {
+                let text = p.as_str().to_lowercase();
+                if text == "byval" {
+                    pass_type = ParameterPassType::ByVal;
+                } else {
+                    pass_type = ParameterPassType::ByRef;
                 }
             }
+            Rule::identifier => name = Identifier::new(p.as_str()),
+            Rule::type_name => param_type = Some(VBType::from_str(p.as_str())),
+            _ => {}
         }
     }
 

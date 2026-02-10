@@ -71,10 +71,11 @@ dim_statement = {
     ("=" ~ (array_literal | expression))?
 }
 
-const_statement = { (^"Public" | ^"Private")? ~ ^"Const" ~ identifier ~ ^"As" ~ type_name ~ "=" ~ expression }
+const_statement = { visibility_modifier? ~ ^"Const" ~ identifier ~ ^"As" ~ type_name ~ "=" ~ expression }
 set_statement = { ^"Set" ~ identifier ~ "=" ~ expression }
 assign_statement = { identifier ~ ("." ~ identifier)* ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? ~ "=" ~ expression }
-redim_statement = { ^"ReDim" ~ (^"Preserve")? ~ identifier ~ "(" ~ array_bounds ~ ")" }
+preserve_keyword = { ^"Preserve" }
+redim_statement = { ^"ReDim" ~ preserve_keyword? ~ identifier ~ "(" ~ array_bounds ~ ")" }
 
 // Array support
 array_bounds = { expression ~ ("," ~ expression)* }
@@ -208,7 +209,8 @@ line_input_statement = { ^"Line" ~ ^"Input" ~ "#" ~ expression ~ "," ~ identifie
 
 // Procedure declarations
 // sub_modifier covers: Public, Private, Protected, Friend, Overrides, Overloads, Shared, etc.
-sub_modifier = _{ ^"Public" | ^"Private" | ^"Protected" | ^"Friend" | ^"Overrides" | ^"Overloads" | ^"Shared" | ^"MustOverride" | ^"Overridable" | ^"NotOverridable" | async_kw }
+sub_modifier_keyword = { ^"Overrides" | ^"Overloads" | ^"Shared" | ^"MustOverride" | ^"Overridable" | ^"NotOverridable" }
+sub_modifier = _{ visibility_modifier | sub_modifier_keyword | async_kw }
 sub_name = { identifier | ^"New" }
 handles_clause = { ^"Handles" ~ dotted_identifier ~ ("," ~ dotted_identifier)* }
 sub_decl = {
@@ -230,7 +232,8 @@ func_block_body = { (NEWLINE | EOI) ~ (!func_end ~ line)* ~ func_end }
 func_end = { ^"End" ~ ^"Function" }
 
 param_list = { param ~ ("," ~ param)* }
-param = { (^"ByVal" | ^"ByRef")? ~ (^"Optional")? ~ identifier ~ (^"As" ~ type_name)? ~ ("=" ~ expression)? }
+pass_type_keyword = { ^"ByVal" | ^"ByRef" }
+param = { pass_type_keyword? ~ (^"Optional")? ~ identifier ~ (^"As" ~ type_name)? ~ ("=" ~ expression)? }
 
 // Module declarations (VB.NET style - members are implicitly shared)
 module_decl = {
