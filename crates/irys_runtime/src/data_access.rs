@@ -150,11 +150,20 @@ pub struct DataAccessManager {
     pub pending_results: HashMap<u64, Vec<RecordSet>>,
 }
 
+/// Native pool wrapper – avoids the `Any` driver's limited type mapping
+/// (e.g. MySQL TINYINT is not supported by `AnyPool`).
+#[derive(Clone)]
+enum PoolKind {
+    Sqlite(sqlx::SqlitePool),
+    Postgres(sqlx::PgPool),
+    MySql(sqlx::MySqlPool),
+}
+
 struct DbConnection {
     #[allow(dead_code)]
     id: u64,
     backend: DbBackend,
-    pool: sqlx::AnyPool,
+    pool: PoolKind,
     #[allow(dead_code)]
     connection_string: String,
     /// Connection timeout parsed from connection string (seconds).
@@ -328,24 +337,55 @@ impl DataAccessManager {
             .and_then(|v| v.parse().ok())
             .unwrap_or(30);
 
-        // Install the sqlx Any driver for this backend
+        // Install the sqlx Any driver for this backend (still needed for some codepaths)
         sqlx::any::install_default_drivers();
 
         let backend_clone = backend.clone();
         let url_clone = url.clone();
-        let pool = self.block_on_bg(move |rt| {
-            rt.block_on(async {
-                let mut opts = sqlx::any::AnyPoolOptions::new();
-                if backend_clone == DbBackend::Sqlite && url_clone.contains(":memory:") {
-                    opts = opts.max_connections(1).min_connections(1);
-                } else {
-                    opts = opts.max_connections(max_pool).min_connections(min_pool);
-                }
-                opts = opts.acquire_timeout(std::time::Duration::from_secs(conn_timeout as u64));
-                opts.connect(&url_clone)
-                    .await
-            })
-        }).map_err(|e| format!("Failed to connect: {}", e))?;
+        let pool: PoolKind = match backend_clone {
+            DbBackend::Sqlite => {
+                let u = url_clone.clone();
+                let p = self.block_on_bg(move |rt| {
+                    rt.block_on(async {
+                        let mut opts = sqlx::sqlite::SqlitePoolOptions::new();
+                        if u.contains(":memory:") {
+                            opts = opts.max_connections(1).min_connections(1);
+                        } else {
+                            opts = opts.max_connections(max_pool).min_connections(min_pool);
+                        }
+                        opts = opts.acquire_timeout(std::time::Duration::from_secs(conn_timeout as u64));
+                        opts.connect(&u).await
+                    })
+                }).map_err(|e| format!("Failed to connect: {}", e))?;
+                PoolKind::Sqlite(p)
+            }
+            DbBackend::Postgres => {
+                let u = url_clone.clone();
+                let p = self.block_on_bg(move |rt| {
+                    rt.block_on(async {
+                        let opts = sqlx::postgres::PgPoolOptions::new()
+                            .max_connections(max_pool)
+                            .min_connections(min_pool)
+                            .acquire_timeout(std::time::Duration::from_secs(conn_timeout as u64));
+                        opts.connect(&u).await
+                    })
+                }).map_err(|e| format!("Failed to connect: {}", e))?;
+                PoolKind::Postgres(p)
+            }
+            DbBackend::MySql => {
+                let u = url_clone.clone();
+                let p = self.block_on_bg(move |rt| {
+                    rt.block_on(async {
+                        let opts = sqlx::mysql::MySqlPoolOptions::new()
+                            .max_connections(max_pool)
+                            .min_connections(min_pool)
+                            .acquire_timeout(std::time::Duration::from_secs(conn_timeout as u64));
+                        opts.connect(&u).await
+                    })
+                }).map_err(|e| format!("Failed to connect: {}", e))?;
+                PoolKind::MySql(p)
+            }
+        };
 
         let id = NEXT_CONN_ID.fetch_add(1, Ordering::SeqCst);
         self.connections.insert(id, DbConnection {
@@ -366,7 +406,11 @@ impl DataAccessManager {
             let pool = conn.pool.clone();
             self.block_on_bg(move |rt| {
                 rt.block_on(async move {
-                    pool.close().await;
+                    match pool {
+                        PoolKind::Sqlite(p) => p.close().await,
+                        PoolKind::Postgres(p) => p.close().await,
+                        PoolKind::MySql(p) => p.close().await,
+                    }
                 });
             });
             Ok(())
@@ -383,47 +427,107 @@ impl DataAccessManager {
 
         let pool = conn.pool.clone();
         let sql_owned = sql.to_string();
-        let rows_result = self.block_on_bg(move |rt| {
-            rt.block_on(async move {
-                use sqlx::Row;
-                use sqlx::Column;
+        let rows_result: Result<(Vec<String>, Vec<DbRow>), String> = match pool {
+            PoolKind::Sqlite(p) => {
+                Ok(self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        use sqlx::Row;
+                        use sqlx::Column;
+                        let raw_rows = sqlx::query(&sql_owned)
+                            .fetch_all(&p).await
+                            .map_err(|e| format!("Query error: {}", e))?;
+                        let mut columns: Vec<String> = Vec::new();
+                        let mut db_rows: Vec<DbRow> = Vec::new();
+                        for raw_row in &raw_rows {
+                            if columns.is_empty() {
+                                columns = raw_row.columns().iter().map(|c| c.name().to_string()).collect();
+                            }
+                            let mut values = Vec::new();
+                            for i in 0..raw_row.columns().len() {
+                                let val: String = raw_row.try_get::<String, _>(i)
+                                    .or_else(|_| raw_row.try_get::<i64, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<f64, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<bool, _>(i).map(|v| v.to_string()))
+                                    .unwrap_or_else(|_| "NULL".to_string());
+                                values.push(val);
+                            }
+                            db_rows.push(DbRow { columns: columns.clone(), values });
+                        }
+                        Ok::<_, String>((columns, db_rows))
+                    })
+                })?)
+            }
+            PoolKind::Postgres(p) => {
+                Ok(self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        use sqlx::Row;
+                        use sqlx::Column;
+                        let raw_rows = sqlx::query(&sql_owned)
+                            .fetch_all(&p).await
+                            .map_err(|e| format!("Query error: {}", e))?;
+                        let mut columns: Vec<String> = Vec::new();
+                        let mut db_rows: Vec<DbRow> = Vec::new();
+                        for raw_row in &raw_rows {
+                            if columns.is_empty() {
+                                columns = raw_row.columns().iter().map(|c| c.name().to_string()).collect();
+                            }
+                            let mut values = Vec::new();
+                            for i in 0..raw_row.columns().len() {
+                                let val: String = raw_row.try_get::<String, _>(i)
+                                    .or_else(|_| raw_row.try_get::<i64, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<i32, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<f64, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<bool, _>(i).map(|v| v.to_string()))
+                                    .unwrap_or_else(|_| "NULL".to_string());
+                                values.push(val);
+                            }
+                            db_rows.push(DbRow { columns: columns.clone(), values });
+                        }
+                        Ok::<_, String>((columns, db_rows))
+                    })
+                })?)
+            }
+            PoolKind::MySql(p) => {
+                Ok(self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        use sqlx::Row;
+                        use sqlx::Column;
+                        let raw_rows = sqlx::query(&sql_owned)
+                            .fetch_all(&p).await
+                            .map_err(|e| format!("Query error: {}", e))?;
+                        let mut columns: Vec<String> = Vec::new();
+                        let mut db_rows: Vec<DbRow> = Vec::new();
+                        for raw_row in &raw_rows {
+                            if columns.is_empty() {
+                                columns = raw_row.columns().iter().map(|c| c.name().to_string()).collect();
+                            }
+                            let mut values = Vec::new();
+                            for i in 0..raw_row.columns().len() {
+                                // MySQL native driver supports all MySQL types including TINYINT
+                                let val: String = raw_row.try_get::<String, _>(i)
+                                    .or_else(|_| raw_row.try_get::<i64, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<i32, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<i16, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<i8, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<u64, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<u32, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<u16, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<u8, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<f64, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<f32, _>(i).map(|v| v.to_string()))
+                                    .or_else(|_| raw_row.try_get::<bool, _>(i).map(|v| v.to_string()))
+                                    .unwrap_or_else(|_| "NULL".to_string());
+                                values.push(val);
+                            }
+                            db_rows.push(DbRow { columns: columns.clone(), values });
+                        }
+                        Ok::<_, String>((columns, db_rows))
+                    })
+                })?)
+            }
+        };
 
-                let raw_rows = sqlx::query(&sql_owned)
-                    .fetch_all(&pool)
-                    .await
-                    .map_err(|e| format!("Query error: {}", e))?;
-
-                let mut columns: Vec<String> = Vec::new();
-                let mut db_rows: Vec<DbRow> = Vec::new();
-
-                for raw_row in &raw_rows {
-                    if columns.is_empty() {
-                        columns = raw_row.columns().iter()
-                            .map(|c| c.name().to_string())
-                            .collect();
-                    }
-
-                    let mut values = Vec::new();
-                    for i in 0..raw_row.columns().len() {
-                        let val: String = raw_row.try_get::<String, _>(i)
-                            .or_else(|_| raw_row.try_get::<i64, _>(i).map(|v| v.to_string()))
-                            .or_else(|_| raw_row.try_get::<f64, _>(i).map(|v| v.to_string()))
-                            .or_else(|_| raw_row.try_get::<bool, _>(i).map(|v| v.to_string()))
-                            .unwrap_or_else(|_| "NULL".to_string());
-                        values.push(val);
-                    }
-
-                    db_rows.push(DbRow {
-                        columns: columns.clone(),
-                        values,
-                    });
-                }
-
-                Ok::<(Vec<String>, Vec<DbRow>), String>((columns, db_rows))
-            })
-        })?;
-
-        let (columns, db_rows) = rows_result;
+        let (columns, db_rows) = rows_result?;
         let rs = RecordSet::new(columns, db_rows, 0);
         let rs_id = rs.id;
         self.recordsets.insert(rs_id, rs);
@@ -489,16 +593,37 @@ impl DataAccessManager {
 
         let pool = conn.pool.clone();
         let sql_owned = sql.to_string();
-        let result = self.block_on_bg(move |rt| {
-            rt.block_on(async move {
-                sqlx::query(&sql_owned)
-                    .execute(&pool)
-                    .await
-                    .map_err(|e| format!("Execute error: {}", e))
-            })
-        })?;
+        let result = match pool {
+            PoolKind::Sqlite(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query(&sql_owned).execute(&p).await
+                            .map(|r| r.rows_affected() as i64)
+                            .map_err(|e| format!("Execute error: {}", e))
+                    })
+                })?
+            }
+            PoolKind::Postgres(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query(&sql_owned).execute(&p).await
+                            .map(|r| r.rows_affected() as i64)
+                            .map_err(|e| format!("Execute error: {}", e))
+                    })
+                })?
+            }
+            PoolKind::MySql(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query(&sql_owned).execute(&p).await
+                            .map(|r| r.rows_affected() as i64)
+                            .map_err(|e| format!("Execute error: {}", e))
+                    })
+                })?
+            }
+        };
 
-        Ok(result.rows_affected() as i64)
+        Ok(result)
     }
 
     /// Execute SQL — auto-detects SELECT vs non-SELECT.
@@ -556,12 +681,32 @@ impl DataAccessManager {
         let conn = self.connections.get(&conn_id)
             .ok_or_else(|| format!("Connection {} not found", conn_id))?;
         let pool = conn.pool.clone();
-        self.block_on_bg(move |rt| {
-            rt.block_on(async move {
-                sqlx::query("BEGIN").execute(&pool).await
-                    .map_err(|e| format!("BEGIN error: {}", e))
-            })
-        })?;
+        match pool {
+            PoolKind::Sqlite(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("BEGIN").execute(&p).await
+                            .map_err(|e| format!("BEGIN error: {}", e))
+                    })
+                })?;
+            }
+            PoolKind::Postgres(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("BEGIN").execute(&p).await
+                            .map_err(|e| format!("BEGIN error: {}", e))
+                    })
+                })?;
+            }
+            PoolKind::MySql(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("BEGIN").execute(&p).await
+                            .map_err(|e| format!("BEGIN error: {}", e))
+                    })
+                })?;
+            }
+        }
         // Use conn_id as transaction id (one active tx per connection)
         Ok(conn_id)
     }
@@ -571,12 +716,32 @@ impl DataAccessManager {
         let conn = self.connections.get(&conn_id)
             .ok_or_else(|| format!("Connection {} not found", conn_id))?;
         let pool = conn.pool.clone();
-        self.block_on_bg(move |rt| {
-            rt.block_on(async move {
-                sqlx::query("COMMIT").execute(&pool).await
-                    .map_err(|e| format!("COMMIT error: {}", e))
-            })
-        })?;
+        match pool {
+            PoolKind::Sqlite(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("COMMIT").execute(&p).await
+                            .map_err(|e| format!("COMMIT error: {}", e))
+                    })
+                })?;
+            }
+            PoolKind::Postgres(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("COMMIT").execute(&p).await
+                            .map_err(|e| format!("COMMIT error: {}", e))
+                    })
+                })?;
+            }
+            PoolKind::MySql(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("COMMIT").execute(&p).await
+                            .map_err(|e| format!("COMMIT error: {}", e))
+                    })
+                })?;
+            }
+        }
         Ok(())
     }
 
@@ -585,12 +750,32 @@ impl DataAccessManager {
         let conn = self.connections.get(&conn_id)
             .ok_or_else(|| format!("Connection {} not found", conn_id))?;
         let pool = conn.pool.clone();
-        self.block_on_bg(move |rt| {
-            rt.block_on(async move {
-                sqlx::query("ROLLBACK").execute(&pool).await
-                    .map_err(|e| format!("ROLLBACK error: {}", e))
-            })
-        })?;
+        match pool {
+            PoolKind::Sqlite(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("ROLLBACK").execute(&p).await
+                            .map_err(|e| format!("ROLLBACK error: {}", e))
+                    })
+                })?;
+            }
+            PoolKind::Postgres(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("ROLLBACK").execute(&p).await
+                            .map_err(|e| format!("ROLLBACK error: {}", e))
+                    })
+                })?;
+            }
+            PoolKind::MySql(p) => {
+                self.block_on_bg(move |rt| {
+                    rt.block_on(async move {
+                        sqlx::query("ROLLBACK").execute(&p).await
+                            .map_err(|e| format!("ROLLBACK error: {}", e))
+                    })
+                })?;
+            }
+        }
         Ok(())
     }
 

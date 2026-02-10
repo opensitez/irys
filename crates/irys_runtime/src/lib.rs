@@ -29,6 +29,7 @@ pub enum RuntimeSideEffect {
     BindingPositionChanged {
         binding_source_name: String,
         position: i32,
+        count: i32,
     },
 }
 

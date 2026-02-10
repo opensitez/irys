@@ -198,9 +198,19 @@ fn process_side_effects(
                     }
                 }
             }
-            RuntimeSideEffect::BindingPositionChanged { binding_source_name: _, position: _ } => {
-                // Bindings are refreshed via the interpreter's side_effects from DataBindings.Add
-                // The interpreter pushes PropertyChange events for bound controls
+            RuntimeSideEffect::BindingPositionChanged { binding_source_name, position, count } => {
+                // Update BindingNavigator display for navigators linked to this BindingSource
+                if let Some(frm) = runtime_form.write().as_mut() {
+                    for ctrl in &mut frm.controls {
+                        if matches!(ctrl.control_type, irys_forms::ControlType::BindingNavigator) {
+                            let ctrl_bs = ctrl.properties.get_string("BindingSource").unwrap_or_default();
+                            if ctrl_bs.eq_ignore_ascii_case(&binding_source_name) {
+                                let count_text = format!("{} of {}", position + 1, count);
+                                ctrl.set_text(count_text);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -676,6 +686,31 @@ pub fn FormRunner() -> Element {
 
                 if let Some(key) = handler_key {
                     let _ = interp.call_event_handler(&key, &[]);
+                }
+            }
+
+            // BindingNavigator auto-delegation: if the event is a navigation
+            // action (MoveFirst, MoveNext, …) and the control is a BindingNavigator,
+            // forward the call to its BindingSource.
+            if let Some(frm) = runtime_form.read().as_ref() {
+                let is_nav_event = matches!(
+                    event_name.as_str(),
+                    "MoveFirst" | "MoveNext" | "MovePrevious" | "MoveLast" | "AddNew" | "Delete"
+                );
+                if is_nav_event {
+                    if let Some(ctrl) = frm.controls.iter().find(|c| c.name == control_name) {
+                        if matches!(ctrl.control_type, irys_forms::ControlType::BindingNavigator) {
+                            let bs_name = ctrl.properties.get_string("BindingSource").unwrap_or_default();
+                            if !bs_name.is_empty() {
+                                let instance_name = format!("RuntimeGlobals.{}Instance", frm.name);
+                                // Call bs.MoveFirst() etc. through the interpreter
+                                let nav_script = format!("{}.{}.{}()", instance_name, bs_name, event_name);
+                                if let Ok(prog) = parse_program(&nav_script) {
+                                    let _ = interp.load_module("NavAction", &prog);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

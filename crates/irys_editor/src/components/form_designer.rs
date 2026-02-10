@@ -662,7 +662,7 @@ fn ControlVisuals(control: Control) -> Element {
                 style: "width: 100%; height: 100%; display: flex; align-items: center; gap: 2px; background: #f0f0f0; border: 1px solid #ccc; padding: 2px 4px; font-size: 11px; color: black;",
                 div { style: "padding: 1px 4px; border: 1px solid #aaa; background: #e8e8e8;", "⏮" }
                 div { style: "padding: 1px 4px; border: 1px solid #aaa; background: #e8e8e8;", "◀" }
-                div { style: "padding: 0 4px; min-width: 30px; text-align: center; border: 1px solid #ccc; background: white;", "0" }
+                div { style: "padding: 0 4px; min-width: 30px; text-align: center; border: 1px solid #ccc; background: white;", "0 of 0" }
                 div { style: "padding: 1px 4px; border: 1px solid #aaa; background: #e8e8e8;", "▶" }
                 div { style: "padding: 1px 4px; border: 1px solid #aaa; background: #e8e8e8;", "⏭" }
                 div { style: "width: 1px; height: 12px; background: #aaa; margin: 0 2px;" }

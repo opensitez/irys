@@ -673,7 +673,32 @@ impl Interpreter {
                             return Ok(());
                         }
 
-                        obj_ref.borrow_mut().fields.insert(member_lower.clone(), val.clone());
+                        // When assigning a WinForms string-proxy (e.g. New TextBox() → "TextBox")
+                        // to an instance field (Me.txt1 = ...), use the field name as the proxy
+                        // so that PropertyChange / DataBindings refer to the control by its
+                        // instance name ("txt1") rather than the class name ("TextBox").
+                        let store_val = if let Value::String(ref s) = val {
+                            let s_lower = s.to_lowercase();
+                            let is_winforms = matches!(s_lower.as_str(),
+                                "textbox" | "label" | "button" | "checkbox" | "radiobutton" |
+                                "groupbox" | "panel" | "combobox" | "listbox" | "picturebox" |
+                                "timer" | "toolstrip" | "menustrip" | "statusstrip" | "tabcontrol" |
+                                "richtextbox" | "progressbar" | "trackbar" | "numericupdown" |
+                                "datetimepicker" | "monthcalendar" | "treeview" | "listview" |
+                                "webbrowser" | "errorprovider" | "tooltip" | "backgroundworker" |
+                                "datagridview" | "bindingnavigator" | "bindingsource" |
+                                "flowlayoutpanel" | "tablelayoutpanel" | "splitcontainer" |
+                                "maskedtextbox" | "domainupdown" | "contextmenustrip"
+                            );
+                            if is_winforms {
+                                Value::String(prop_name.clone())
+                            } else {
+                                val.clone()
+                            }
+                        } else {
+                            val.clone()
+                        };
+                        obj_ref.borrow_mut().fields.insert(member_lower.clone(), store_val);
 
                         // If this looks like a control object, push a side-effect so the UI can sync
                         let mut obj_name: Option<String> = None;
@@ -1599,7 +1624,10 @@ impl Interpreter {
                     return Ok(crate::builtins::dialogs::create_folderbrowserdialog());
                 }
 
-                if class_name.starts_with("system.windows.forms.") {
+                if class_name.starts_with("system.windows.forms.")
+                    && class_name != "system.windows.forms.bindingsource"
+                    && class_name != "system.windows.forms.bindingnavigator"
+                {
                     // Return the base name as a proxy for controls (e.g. "Button", "Label")
                     let base_name = class_id.as_str().split('.').last().unwrap_or(class_id.as_str()).to_string();
                     return Ok(Value::String(base_name));
@@ -4472,11 +4500,14 @@ impl Interpreter {
                     match method_name.as_str() {
                         "fill" => {
                             // adapter.Fill(dataTable) or adapter.Fill(dataSet)
-                            let sql = obj_ref.borrow().fields.get("selectcommandtext")
+                            let da_borrow = obj_ref.borrow();
+                            let sql = da_borrow.fields.get("selectcommandtext")
+                                .or_else(|| da_borrow.fields.get("selectcommand"))
                                 .map(|v| v.as_string()).unwrap_or_default();
-                            let conn_id = obj_ref.borrow().fields.get("__conn_id")
+                            let conn_id = da_borrow.fields.get("__conn_id")
                                 .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
                                 .unwrap_or(0);
+                            drop(da_borrow);
                             let dam = crate::data_access::get_global_dam();
                             let rs_id = dam.lock().unwrap().execute_reader(conn_id, &sql)
                                 .map_err(|e| RuntimeError::Custom(e))?;
@@ -4785,44 +4816,47 @@ impl Interpreter {
                         .map(|v| v.as_string()).unwrap_or_default();
                     match method_name.as_str() {
                         "movenext" => {
-                            let mut bs = obj_ref.borrow_mut();
-                            let ds = bs.fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
+                            let ds = obj_ref.borrow().fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
                             let count = self.binding_source_row_count(&ds);
-                            let pos = bs.fields.get("position")
+                            let pos = obj_ref.borrow().fields.get("position")
                                 .and_then(|v| if let Value::Integer(i) = v { Some(*i) } else { None })
                                 .unwrap_or(0);
-                            if pos < count - 1 {
-                                bs.fields.insert("position".to_string(), Value::Integer(pos + 1));
-                            }
-                            let new_pos = pos.min(count - 1).max(0);
-                            if pos < count - 1 {
-                                self.side_effects.push_back(crate::RuntimeSideEffect::BindingPositionChanged {
-                                    binding_source_name: bs_name.clone(),
-                                    position: new_pos + 1,
-                                });
-                            }
+                            let new_pos = if pos < count - 1 { pos + 1 } else { pos };
+                            obj_ref.borrow_mut().fields.insert("position".to_string(), Value::Integer(new_pos));
+                            self.side_effects.push_back(crate::RuntimeSideEffect::BindingPositionChanged {
+                                binding_source_name: bs_name.clone(),
+                                position: new_pos,
+                                count,
+                            });
+                            self.refresh_bindings(obj_ref, &ds, new_pos);
                             return Ok(Value::Nothing);
                         }
                         "moveprevious" => {
-                            let mut bs = obj_ref.borrow_mut();
-                            let pos = bs.fields.get("position")
+                            let ds = obj_ref.borrow().fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
+                            let count = self.binding_source_row_count(&ds);
+                            let pos = obj_ref.borrow().fields.get("position")
                                 .and_then(|v| if let Value::Integer(i) = v { Some(*i) } else { None })
                                 .unwrap_or(0);
-                            if pos > 0 {
-                                bs.fields.insert("position".to_string(), Value::Integer(pos - 1));
-                                self.side_effects.push_back(crate::RuntimeSideEffect::BindingPositionChanged {
-                                    binding_source_name: bs_name.clone(),
-                                    position: pos - 1,
-                                });
-                            }
+                            let new_pos = if pos > 0 { pos - 1 } else { 0 };
+                            obj_ref.borrow_mut().fields.insert("position".to_string(), Value::Integer(new_pos));
+                            self.side_effects.push_back(crate::RuntimeSideEffect::BindingPositionChanged {
+                                binding_source_name: bs_name.clone(),
+                                position: new_pos,
+                                count,
+                            });
+                            self.refresh_bindings(obj_ref, &ds, new_pos);
                             return Ok(Value::Nothing);
                         }
                         "movefirst" => {
+                            let ds = obj_ref.borrow().fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
+                            let count = self.binding_source_row_count(&ds);
                             obj_ref.borrow_mut().fields.insert("position".to_string(), Value::Integer(0));
                             self.side_effects.push_back(crate::RuntimeSideEffect::BindingPositionChanged {
                                 binding_source_name: bs_name.clone(),
                                 position: 0,
+                                count,
                             });
+                            self.refresh_bindings(obj_ref, &ds, 0);
                             return Ok(Value::Nothing);
                         }
                         "movelast" => {
@@ -4833,7 +4867,9 @@ impl Interpreter {
                             self.side_effects.push_back(crate::RuntimeSideEffect::BindingPositionChanged {
                                 binding_source_name: bs_name.clone(),
                                 position: last,
+                                count,
                             });
+                            self.refresh_bindings(obj_ref, &ds, last);
                             return Ok(Value::Nothing);
                         }
                         "removecurrent" => {
@@ -4895,18 +4931,35 @@ impl Interpreter {
                                     .unwrap_or_default();
                                 if ds_type == "BindingSource" {
                                     let ds_val = ds_ref.borrow().fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
+                                    let dm = ds_ref.borrow().fields.get("datamember")
+                                        .map(|v| v.as_string()).unwrap_or_default();
+                                    eprintln!("[DataBindings.Add] ctrl={} prop={} dm={} ds_val={}", parent_name, prop_name, data_member, match &ds_val { Value::Nothing => "Nothing", Value::Object(_) => "Object", Value::String(_) => "String", _ => "other" });
+                                    Self::inject_select_from_data_member(&ds_val, &dm);
                                     let pos = ds_ref.borrow().fields.get("position")
                                         .and_then(|v| if let Value::Integer(i) = v { Some(*i) } else { None })
                                         .unwrap_or(0);
                                     let row = self.binding_source_get_row(&ds_val, pos);
+                                    eprintln!("[DataBindings.Add] row={}", match &row { Value::Nothing => "Nothing", Value::Object(_) => "Object", _ => "other" });
                                     if let Value::Object(row_ref) = &row {
                                         let member_lower = data_member.to_lowercase();
                                         let cell_val = row_ref.borrow().fields.get(&member_lower)
                                             .cloned().unwrap_or(Value::String(String::new()));
+                                        eprintln!("[DataBindings.Add] cell_val for '{}' = {:?}", member_lower, cell_val.as_string());
                                         self.side_effects.push_back(crate::RuntimeSideEffect::PropertyChange {
                                             object: parent_name.clone(),
                                             property: prop_name.clone(),
                                             value: cell_val,
+                                        });
+                                    }
+                                    // Push initial position update for any linked BindingNavigators
+                                    let bs_name = ds_ref.borrow().fields.get("name")
+                                        .map(|v| v.as_string()).unwrap_or_default();
+                                    if !bs_name.is_empty() {
+                                        let count = self.binding_source_row_count(&Value::Object(ds_ref.clone()));
+                                        self.side_effects.push_back(crate::RuntimeSideEffect::BindingPositionChanged {
+                                            binding_source_name: bs_name,
+                                            position: pos,
+                                            count,
                                         });
                                     }
                                 }
@@ -6189,8 +6242,141 @@ impl Interpreter {
         Ok(())
     }
 
-    /// Get the row count from a DataSource (DataTable, DataSet, or Array).
-    fn binding_source_row_count(&self, datasource: &Value) -> i32 {
+    /// Refresh all controls bound to a BindingSource after the position has changed.
+    /// Reads the __bindings array (entries: "controlName|propertyName|dataMember")
+    /// and pushes PropertyChange side effects for each.
+    fn refresh_bindings(
+        &mut self,
+        bs_ref: &std::rc::Rc<std::cell::RefCell<crate::value::ObjectData>>,
+        datasource: &Value,
+        position: i32,
+    ) {
+        let bindings: Vec<String> = bs_ref.borrow()
+            .fields.get("__bindings")
+            .and_then(|v| if let Value::Array(arr) = v {
+                Some(arr.iter().filter_map(|v| if let Value::String(s) = v { Some(s.clone()) } else { None }).collect())
+            } else { None })
+            .unwrap_or_default();
+
+        if bindings.is_empty() { return; }
+
+        let row = self.binding_source_get_row(datasource, position);
+        if let Value::Object(row_ref) = &row {
+            for entry in &bindings {
+                let parts: Vec<&str> = entry.split('|').collect();
+                if parts.len() >= 3 {
+                    let ctrl_name = parts[0];
+                    let prop_name = parts[1];
+                    let data_member = parts[2].to_lowercase();
+                    let cell_val = row_ref.borrow().fields.get(&data_member)
+                        .cloned().unwrap_or(Value::String(String::new()));
+                    self.side_effects.push_back(crate::RuntimeSideEffect::PropertyChange {
+                        object: ctrl_name.to_string(),
+                        property: prop_name.to_string(),
+                        value: cell_val,
+                    });
+                }
+            }
+        }
+    }
+
+    /// If `ds` is a DataAdapter that has no SelectCommand yet and `data_member`
+    /// is non-empty, inject `SELECT * FROM <data_member>` as the selectcommandtext.
+    fn inject_select_from_data_member(ds: &Value, data_member: &str) {
+        if data_member.is_empty() { return; }
+        if let Value::Object(da_ref) = ds {
+            let da = da_ref.borrow();
+            let is_da = da.fields.get("__type")
+                .map(|v| v.as_string() == "DataAdapter")
+                .unwrap_or(false);
+            if !is_da { return; }
+            let has_sql = da.fields.get("selectcommandtext")
+                .or(da.fields.get("selectcommand"))
+                .map(|v| !v.as_string().is_empty())
+                .unwrap_or(false);
+            drop(da);
+            if !has_sql {
+                da_ref.borrow_mut().fields.insert(
+                    "selectcommandtext".to_string(),
+                    Value::String(format!("SELECT * FROM {}", data_member)),
+                );
+            }
+        }
+    }
+
+    /// Auto-fill a DataAdapter: open a connection using its ConnectionString,
+    /// execute its SelectCommand, and store the resulting recordset ID on the adapter.
+    /// This is called lazily the first time a BindingSource (or control) tries
+    /// to read data through a DataAdapter that hasn't been filled yet.
+    fn auto_fill_data_adapter(da_ref: &std::rc::Rc<std::cell::RefCell<crate::value::ObjectData>>) {
+        // Already filled?
+        let already = da_ref.borrow().fields.get("__rs_id")
+            .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+            .unwrap_or(0);
+        if already > 0 { return; }
+
+        let da = da_ref.borrow();
+        // Get the SQL query — designer stores as "selectcommand", constructor as "selectcommandtext"
+        let sql = da.fields.get("selectcommandtext")
+            .or_else(|| da.fields.get("selectcommand"))
+            .map(|v| v.as_string())
+            .unwrap_or_default();
+        let conn_str = da.fields.get("connectionstring")
+            .map(|v| v.as_string())
+            .unwrap_or_default();
+        let conn_id_existing = da.fields.get("__conn_id")
+            .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+            .unwrap_or(0);
+        // Also check DataMember on the parent BindingSource if no SQL is set
+        drop(da);
+
+        if conn_str.is_empty() && conn_id_existing == 0 {
+            eprintln!("[auto_fill] DataAdapter has no ConnectionString and no connection");
+            return;
+        }
+
+        let dam = crate::data_access::get_global_dam();
+        let mut dam_lock = dam.lock().unwrap();
+
+        // Open connection if we don't have one yet
+        let conn_id = if conn_id_existing > 0 {
+            conn_id_existing
+        } else if !conn_str.is_empty() {
+            match dam_lock.open_connection(&conn_str) {
+                Ok(id) => {
+                    da_ref.borrow_mut().fields.insert("__conn_id".to_string(), Value::Long(id as i64));
+                    id
+                }
+                Err(e) => {
+                    eprintln!("[auto_fill] Failed to connect: {}", e);
+                    return;
+                }
+            }
+        } else {
+            return;
+        };
+
+        if sql.is_empty() {
+            eprintln!("[auto_fill] DataAdapter has no SelectCommand");
+            return;
+        }
+
+        match dam_lock.execute_reader(conn_id, &sql) {
+            Ok(rs_id) => {
+                eprintln!("[auto_fill] OK: rs_id={}, rows={}",
+                    rs_id,
+                    dam_lock.recordsets.get(&rs_id).map(|r| r.record_count()).unwrap_or(0));
+                da_ref.borrow_mut().fields.insert("__rs_id".to_string(), Value::Long(rs_id as i64));
+            }
+            Err(e) => {
+                eprintln!("[auto_fill] Query error: {}", e);
+            }
+        }
+    }
+
+    /// Get the row count from a DataSource (DataTable, DataSet, DataAdapter, or Array).
+    /// If the DataSource is a DataAdapter that hasn't been filled yet, auto-fill it.
+    pub fn binding_source_row_count(&self, datasource: &Value) -> i32 {
         match datasource {
             Value::Object(obj_ref) => {
                 let obj = obj_ref.borrow();
@@ -6223,6 +6409,26 @@ impl Interpreter {
                             }
                         }
                     }
+                } else if dt_type == "DataAdapter" {
+                    drop(obj);
+                    Self::auto_fill_data_adapter(obj_ref);
+                    let rs_id = obj_ref.borrow().fields.get("__rs_id")
+                        .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                        .unwrap_or(0);
+                    if rs_id > 0 {
+                        let dam = crate::data_access::get_global_dam();
+                        let dam_lock = dam.lock().unwrap();
+                        if let Some(rs) = dam_lock.recordsets.get(&rs_id) {
+                            return rs.record_count();
+                        }
+                    }
+                } else if dt_type == "BindingSource" {
+                    let inner_ds = obj.fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
+                    let data_member = obj.fields.get("datamember")
+                        .map(|v| v.as_string()).unwrap_or_default();
+                    drop(obj);
+                    Self::inject_select_from_data_member(&inner_ds, &data_member);
+                    return self.binding_source_row_count(&inner_ds);
                 }
                 0
             }
@@ -6235,25 +6441,45 @@ impl Interpreter {
     fn binding_source_get_row(&self, datasource: &Value, position: i32) -> Value {
         match datasource {
             Value::Object(obj_ref) => {
-                let obj = obj_ref.borrow();
-                let dt_type = obj.fields.get("__type")
-                    .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None })
-                    .unwrap_or_default();
-                let rs_id = if dt_type == "DataTable" {
-                    obj.fields.get("__rs_id")
-                        .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
-                        .unwrap_or(0)
-                } else if dt_type == "DataSet" {
-                    // Use first table
-                    if let Some(Value::Array(tables)) = obj.fields.get("__tables") {
-                        if let Some(Value::Object(dt_ref)) = tables.first() {
-                            dt_ref.borrow().fields.get("__rs_id")
-                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
-                                .unwrap_or(0)
+                let dt_type = {
+                    let obj = obj_ref.borrow();
+                    obj.fields.get("__type")
+                        .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None })
+                        .unwrap_or_default()
+                };
+
+                // BindingSource: follow __datasource recursively
+                if dt_type == "BindingSource" {
+                    let obj = obj_ref.borrow();
+                    let inner_ds = obj.fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
+                    let data_member = obj.fields.get("datamember")
+                        .map(|v| v.as_string()).unwrap_or_default();
+                    drop(obj);
+                    Self::inject_select_from_data_member(&inner_ds, &data_member);
+                    return self.binding_source_get_row(&inner_ds, position);
+                }
+
+                // DataAdapter: auto-fill if needed
+                if dt_type == "DataAdapter" {
+                    Self::auto_fill_data_adapter(obj_ref);
+                }
+
+                let rs_id = {
+                    let obj = obj_ref.borrow();
+                    if dt_type == "DataTable" || dt_type == "DataAdapter" {
+                        obj.fields.get("__rs_id")
+                            .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                            .unwrap_or(0)
+                    } else if dt_type == "DataSet" {
+                        if let Some(Value::Array(tables)) = obj.fields.get("__tables") {
+                            if let Some(Value::Object(dt_ref)) = tables.first() {
+                                dt_ref.borrow().fields.get("__rs_id")
+                                    .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                    .unwrap_or(0)
+                            } else { 0 }
                         } else { 0 }
                     } else { 0 }
-                } else { 0 };
-                drop(obj);
+                };
 
                 if rs_id > 0 {
                     let dam = crate::data_access::get_global_dam();
@@ -6290,29 +6516,45 @@ impl Interpreter {
     fn get_datasource_table_data(&self, datasource: &Value) -> (Vec<String>, Vec<Vec<String>>) {
         match datasource {
             Value::Object(obj_ref) => {
-                let obj = obj_ref.borrow();
-                let dt_type = obj.fields.get("__type")
-                    .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None })
-                    .unwrap_or_default();
-                let rs_id = if dt_type == "DataTable" {
-                    obj.fields.get("__rs_id")
-                        .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
-                        .unwrap_or(0)
-                } else if dt_type == "DataSet" {
-                    if let Some(Value::Array(tables)) = obj.fields.get("__tables") {
-                        if let Some(Value::Object(dt_ref)) = tables.first() {
-                            dt_ref.borrow().fields.get("__rs_id")
-                                .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
-                                .unwrap_or(0)
+                let dt_type = {
+                    let obj = obj_ref.borrow();
+                    obj.fields.get("__type")
+                        .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None })
+                        .unwrap_or_default()
+                };
+
+                // BindingSource: follow __datasource recursively
+                if dt_type == "BindingSource" {
+                    let obj = obj_ref.borrow();
+                    let inner_ds = obj.fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
+                    let data_member = obj.fields.get("datamember")
+                        .map(|v| v.as_string()).unwrap_or_default();
+                    drop(obj);
+                    Self::inject_select_from_data_member(&inner_ds, &data_member);
+                    return self.get_datasource_table_data(&inner_ds);
+                }
+
+                // DataAdapter: auto-fill if needed
+                if dt_type == "DataAdapter" {
+                    Self::auto_fill_data_adapter(obj_ref);
+                }
+
+                let rs_id = {
+                    let obj = obj_ref.borrow();
+                    if dt_type == "DataTable" || dt_type == "DataAdapter" {
+                        obj.fields.get("__rs_id")
+                            .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                            .unwrap_or(0)
+                    } else if dt_type == "DataSet" {
+                        if let Some(Value::Array(tables)) = obj.fields.get("__tables") {
+                            if let Some(Value::Object(dt_ref)) = tables.first() {
+                                dt_ref.borrow().fields.get("__rs_id")
+                                    .and_then(|v| if let Value::Long(l) = v { Some(*l as u64) } else { None })
+                                    .unwrap_or(0)
+                            } else { 0 }
                         } else { 0 }
                     } else { 0 }
-                } else if dt_type == "BindingSource" {
-                    // Follow the BindingSource's DataSource
-                    let inner_ds = obj.fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
-                    drop(obj);
-                    return self.get_datasource_table_data(&inner_ds);
-                } else { 0 };
-                drop(obj);
+                };
 
                 if rs_id > 0 {
                     let dam = crate::data_access::get_global_dam();
