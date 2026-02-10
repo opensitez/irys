@@ -681,6 +681,7 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
         Rule::while_statement => parse_while_statement(pair),
         Rule::do_loop_statement => parse_do_loop_statement(pair),
         Rule::with_statement => parse_with_statement(pair),
+        Rule::using_statement => parse_using_statement(pair),
         Rule::exit_statement => {
             let mut inner = pair.into_inner();
             let exit_type = inner.next()
@@ -1348,6 +1349,50 @@ fn parse_with_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
     }
 
     Ok(Statement::With { object, body })
+}
+
+fn parse_using_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
+    let mut inner = pair.into_inner();
+    let variable = Identifier::new(inner.next().unwrap().as_str());
+    
+    // Collect remaining pairs
+    let remaining: Vec<_> = inner.collect();
+    
+    // Find the expression (resource)
+    let mut resource_expr = None;
+    let mut body_start_idx = 0;
+    
+    for (idx, p) in remaining.iter().enumerate() {
+        match p.as_rule() {
+            Rule::type_name => {}, // Skip type annotation
+            Rule::expression => {
+                resource_expr = Some(parse_expression(p.clone())?);
+                body_start_idx = idx + 1;
+                break;
+            }
+            _ => {}
+        }
+    }
+    
+    let resource = resource_expr.ok_or_else(|| ParseError::Custom("Using statement missing resource expression".to_string()))?;
+    
+    // Parse body statements
+    let mut body = Vec::new();
+    for p in remaining.iter().skip(body_start_idx) {
+        match p.as_rule() {
+            Rule::statement_line => {
+                for stmt_pair in p.clone().into_inner() {
+                    if stmt_pair.as_rule() != Rule::NEWLINE && stmt_pair.as_rule() != Rule::EOI {
+                        body.push(parse_statement(stmt_pair)?);
+                    }
+                }
+            }
+            Rule::NEWLINE | Rule::using_end => {}
+            _ => {}
+        }
+    }
+
+    Ok(Statement::Using { variable, resource, body })
 }
 
 fn parse_enum_decl(pair: Pair<Rule>) -> ParseResult<EnumDecl> {

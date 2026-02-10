@@ -88,6 +88,13 @@ pub enum Statement {
         body: Vec<Statement>,
     },
 
+    // Using block (resource disposal)
+    Using {
+        variable: Identifier,
+        resource: Expression,
+        body: Vec<Statement>,
+    },
+
     // Exit statements
     ExitSub,
     ExitFunction,

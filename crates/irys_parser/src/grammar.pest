@@ -48,6 +48,7 @@ statement = _{
     | do_loop_statement
     | select_statement
     | with_statement
+    | using_statement
     | try_statement
     | continue_statement
     | exit_statement
@@ -172,6 +173,13 @@ with_statement = {
     ~ with_end
 }
 with_end = { ^"End" ~ ^"With" }
+
+using_statement = {
+    ^"Using" ~ identifier ~ (^"As" ~ type_name)? ~ "=" ~ expression ~ (NEWLINE | EOI)
+    ~ (!using_end ~ line)*
+    ~ using_end
+}
+using_end = { ^"End" ~ ^"Using" }
 
 // Dot-member access for With blocks: .Property = value, .Method(args)
 dot_assign_statement = { "." ~ identifier ~ ("." ~ identifier)* ~ "=" ~ expression }

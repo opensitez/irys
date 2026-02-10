@@ -1012,6 +1012,30 @@ impl Interpreter {
                 Ok(())
             }
 
+            Statement::Using { variable, resource, body } => {
+                // Evaluate the resource and bind to the given variable for the scope of the block.
+                let res_val = self.evaluate_expr(resource)?;
+                self.env.define(variable.as_str(), res_val.clone());
+
+                for s in body {
+                    self.execute(s)?;
+                }
+
+                // Best-effort dispose: if the object has a Dispose method, invoke it.
+                if let Value::Object(obj_ref) = res_val.clone() {
+                    let class_name = obj_ref.borrow().class_name.clone();
+                    if let Some(method) = self.find_method(&class_name, "Dispose") {
+                        if let irys_parser::ast::decl::MethodDecl::Sub(s) = method {
+                            let _ = self.call_user_sub(&s, &[], Some(obj_ref.clone()));
+                        }
+                    }
+                }
+
+                // Clear the variable after leaving the Using scope.
+                let _ = self.env.set(variable.as_str(), Value::Nothing);
+                Ok(())
+            }
+
             Statement::Open { file_path, mode, file_number } => {
                 let path = self.evaluate_expr(file_path)?.as_string();
                 let fn_val = self.evaluate_expr(file_number)?.as_integer()?;

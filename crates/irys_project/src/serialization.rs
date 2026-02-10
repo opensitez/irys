@@ -563,7 +563,7 @@ pub fn load_project_vbp(path: impl AsRef<Path>) -> SaveResult<Project> {
     let content = fs::read_to_string(path)?;
     
     let mut name = String::new();
-    let mut startup_form = None;
+    let mut startup_value = None;
     let mut form_paths = Vec::new();
     let mut vb_form_paths = Vec::new();
     let mut module_paths = Vec::new();
@@ -574,9 +574,7 @@ pub fn load_project_vbp(path: impl AsRef<Path>) -> SaveResult<Project> {
             name = line.trim_start_matches("Name=\"").trim_end_matches('"').to_string();
         } else if line.starts_with("Startup=\"") {
             let s = line.trim_start_matches("Startup=\"").trim_end_matches('"');
-            if s != "Sub Main" {
-                startup_form = Some(s.to_string());
-            }
+            startup_value = Some(s.to_string());
         } else if line.starts_with("FormVB=") {
             vb_form_paths.push(line.trim_start_matches("FormVB=").to_string());
         } else if line.starts_with("Form=") {
@@ -598,7 +596,16 @@ pub fn load_project_vbp(path: impl AsRef<Path>) -> SaveResult<Project> {
     }
 
     let mut project = Project::new(&name);
-    project.startup_form = startup_form;
+    
+    // Set startup object based on parsed Startup value
+    if let Some(ref startup) = startup_value {
+        if startup.eq_ignore_ascii_case("Sub Main") || startup == "Sub Main" {
+            project.startup_object = crate::project::StartupObject::SubMain;
+        } else {
+            project.startup_object = crate::project::StartupObject::Form(startup.clone());
+            project.startup_form = Some(startup.clone());
+        }
+    }
 
     let parent_dir = path.parent().unwrap_or(Path::new("."));
 
@@ -653,11 +660,19 @@ fn load_code_file_bas(path: &Path) -> SaveResult<CodeFile> {
 
     for line in content.lines() {
         if line.trim().starts_with("Attribute VB_Name =") {
-             name = line.split('=').nth(1).unwrap_or("Code1").trim().trim_matches('"').to_string();
+             name = line.split('=').nth(1).unwrap_or("").trim().trim_matches('"').to_string();
         } else if !line.trim().starts_with("Attribute") {
              code.push_str(line);
              code.push('\n');
         }
+    }
+    
+    // If no VB_Name attribute found, use filename
+    if name.is_empty() {
+        name = path.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
     }
 
     Ok(CodeFile {
