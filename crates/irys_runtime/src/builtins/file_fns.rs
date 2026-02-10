@@ -1,6 +1,30 @@
 use crate::value::{RuntimeError, Value};
-use std::fs;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::rc::Rc;
+
+// File handle storage
+thread_local! {
+    static FILE_HANDLES: RefCell<HashMap<i32, Rc<RefCell<FileHandle>>>> = RefCell::new(HashMap::new());
+}
+
+enum FileHandle {
+    Text(BufWriter<File>, File), // Writer and original file for seeking
+    Binary(File),
+}
+
+impl FileHandle {
+    fn seek(&mut self, pos: u64) -> std::io::Result<u64> {
+        match self {
+            FileHandle::Text(_, file) => file.seek(SeekFrom::Start(pos)),
+            FileHandle::Binary(file) => file.seek(SeekFrom::Start(pos)),
+        }
+    }
+}
+
 
 // ─── System.IO.File ───
 
@@ -9,7 +33,7 @@ pub fn file_readalltext_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         return Err(RuntimeError::Custom("File.ReadAllText requires a path argument".to_string()));
     }
     let path = args[0].as_string();
-    match fs::read_to_string(&path) {
+    match std::fs::read_to_string(&path) {
         Ok(content) => Ok(Value::String(content)),
         Err(e) => Err(RuntimeError::Custom(format!("File.ReadAllText error: {}", e))),
     }
@@ -21,7 +45,7 @@ pub fn file_writealltext_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     }
     let path = args[0].as_string();
     let content = args[1].as_string();
-    match fs::write(&path, &content) {
+    match std::fs::write(&path, &content) {
         Ok(_) => Ok(Value::Nothing),
         Err(e) => Err(RuntimeError::Custom(format!("File.WriteAllText error: {}", e))),
     }
@@ -49,7 +73,249 @@ pub fn file_exists_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         return Err(RuntimeError::Custom("File.Exists requires a path argument".to_string()));
     }
     let path = args[0].as_string();
-    Ok(Value::Boolean(Path::new(&path).is_file()))
+    Ok(Value::Boolean(Path::new(&path).exists()))
+}
+
+/// Open path For [Input|Output|Append|Binary] As #filenumber
+pub fn open_file_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    // Args: filename, mode (Input/Output/Append/Binary), filenumber
+    if args.len() < 3 {
+        return Err(RuntimeError::Custom("Open requires filename, mode, and filenumber".to_string()));
+    }
+    
+    let path = args[0].as_string();
+    let mode = args[1].as_string().to_lowercase();
+    let file_num = args[2].as_integer()?;
+    
+    let file = match mode.as_str() {
+        "input" => OpenOptions::new().read(true).open(&path),
+        "output" => OpenOptions::new().write(true).create(true).truncate(true).open(&path),
+        "append" => OpenOptions::new().write(true).create(true).append(true).open(&path),
+        "binary" => OpenOptions::new().read(true).write(true).create(true).open(&path),
+        _ => return Err(RuntimeError::Custom(format!("Invalid file mode: {}", mode))),
+    };
+    
+    let file = file.map_err(|e| RuntimeError::Custom(format!("Open error: {}", e)))?;
+    
+    let handle = if mode == "binary" {
+        FileHandle::Binary(file)
+    } else {
+        let reader = file.try_clone().map_err(|e| RuntimeError::Custom(format!("Clone error: {}", e)))?;
+        FileHandle::Text(BufWriter::new(file), reader)
+    };
+    
+    FILE_HANDLES.with(|handles| {
+        handles.borrow_mut().insert(file_num, Rc::new(RefCell::new(handle)));
+    });
+    
+    Ok(Value::Nothing)
+}
+
+/// Close #filenumber - Close an open file
+pub fn close_file_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Err(RuntimeError::Custom("Close requires a filenumber".to_string()));
+    }
+    
+    let file_num = args[0].as_integer()?;
+    
+    FILE_HANDLES.with(|handles| {
+        handles.borrow_mut().remove(&file_num);
+    });
+    
+    Ok(Value::Nothing)
+}
+
+/// Print #filenumber, expression - Write to file
+pub fn print_file_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::Custom("Print # requires filenumber and expression".to_string()));
+    }
+    
+    let file_num = args[0].as_integer()?;
+    let text = args[1].as_string();
+    
+    FILE_HANDLES.with(|handles| {
+        let handles = handles.borrow();
+        if let Some(handle_rc) = handles.get(&file_num) {
+            let mut handle = handle_rc.borrow_mut();
+            match &mut *handle {
+                FileHandle::Text(writer, _) => {
+                    writer.write_all(text.as_bytes())
+                        .map_err(|e| RuntimeError::Custom(format!("Print # error: {}", e)))?;
+                    writer.write_all(b"\n")
+                        .map_err(|e| RuntimeError::Custom(format!("Print # error: {}", e)))?;
+                    writer.flush()
+                        .map_err(|e| RuntimeError::Custom(format!("Print # flush error: {}", e)))?;
+                }
+                FileHandle::Binary(file) => {
+                    file.write_all(text.as_bytes())
+                        .map_err(|e| RuntimeError::Custom(format!("Print # error: {}", e)))?;
+                    file.write_all(b"\n")
+                        .map_err(|e| RuntimeError::Custom(format!("Print # error: {}", e)))?;
+                }
+            }
+            Ok(Value::Nothing)
+        } else {
+            Err(RuntimeError::Custom(format!("File #{} not open", file_num)))
+        }
+    })
+}
+
+/// Write #filenumber, expression - Write formatted to file
+pub fn write_file_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::Custom("Write # requires filenumber and expression".to_string()));
+    }
+    
+    let file_num = args[0].as_integer()?;
+    let text = args[1].as_string();
+    
+    FILE_HANDLES.with(|handles| {
+        let handles = handles.borrow();
+        if let Some(handle_rc) = handles.get(&file_num) {
+            let mut handle = handle_rc.borrow_mut();
+            let formatted = format!("\"{}\",", text); // CSV-style formatting
+            match &mut *handle {
+                FileHandle::Text(writer, _) => {
+                    writer.write_all(formatted.as_bytes())
+                        .map_err(|e| RuntimeError::Custom(format!("Write # error: {}", e)))?;
+                    writer.flush()
+                        .map_err(|e| RuntimeError::Custom(format!("Write # flush error: {}", e)))?;
+                }
+                FileHandle::Binary(file) => {
+                    file.write_all(formatted.as_bytes())
+                        .map_err(|e| RuntimeError::Custom(format!("Write # error: {}", e)))?;
+                }
+            }
+            Ok(Value::Nothing)
+        } else {
+            Err(RuntimeError::Custom(format!("File #{} not open", file_num)))
+        }
+    })
+}
+
+/// Line Input #filenumber, variable - Read a line from file
+pub fn line_input_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Err(RuntimeError::Custom("Line Input # requires a filenumber".to_string()));
+    }
+    
+    let file_num = args[0].as_integer()?;
+    
+    FILE_HANDLES.with(|handles| {
+        let handles = handles.borrow();
+        if let Some(handle_rc) = handles.get(&file_num) {
+            let mut handle = handle_rc.borrow_mut();
+            match &mut *handle {
+                FileHandle::Text(_, file) => {
+                    let mut reader = BufReader::new(file.try_clone()
+                        .map_err(|e| RuntimeError::Custom(format!("Clone error: {}", e)))?);
+                    let mut line = String::new();
+                    reader.read_line(&mut line)
+                        .map_err(|e| RuntimeError::Custom(format!("Line Input # error: {}", e)))?;
+                    if line.ends_with('\n') {
+                        line.pop();
+                        if line.ends_with('\r') {
+                            line.pop();
+                        }
+                    }
+                    Ok(Value::String(line))
+                }
+                FileHandle::Binary(_) => {
+                    Err(RuntimeError::Custom("Line Input # not supported for binary files".to_string()))
+                }
+            }
+        } else {
+            Err(RuntimeError::Custom(format!("File #{} not open", file_num)))
+        }
+    })
+}
+
+/// Seek #filenumber, position - Set file position
+pub fn seek_file_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::Custom("Seek requires filenumber and position".to_string()));
+    }
+    
+    let file_num = args[0].as_integer()?;
+    let position = args[1].as_integer()? as u64;
+    
+    FILE_HANDLES.with(|handles| {
+        let handles = handles.borrow();
+        if let Some(handle_rc) = handles.get(&file_num) {
+            let mut handle = handle_rc.borrow_mut();
+            handle.seek(position)
+                .map_err(|e| RuntimeError::Custom(format!("Seek error: {}", e)))?;
+            Ok(Value::Nothing)
+        } else {
+            Err(RuntimeError::Custom(format!("File #{} not open", file_num)))
+        }
+    })
+}
+
+/// Get #filenumber, , variable - Read data from binary file
+pub fn get_file_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::Custom("Get requires filenumber and optional position".to_string()));
+    }
+    
+    let file_num = args[0].as_integer()?;
+    let num_bytes = if args.len() > 2 {
+        args[2].as_integer()? as usize
+    } else {
+        1024 // Default read size
+    };
+    
+    FILE_HANDLES.with(|handles| {
+        let handles = handles.borrow();
+        if let Some(handle_rc) = handles.get(&file_num) {
+            let mut handle = handle_rc.borrow_mut();
+            match &mut *handle {
+                FileHandle::Binary(file) => {
+                    let mut buffer = vec![0u8; num_bytes];
+                    let bytes_read = file.read(&mut buffer)
+                        .map_err(|e| RuntimeError::Custom(format!("Get error: {}", e)))?;
+                    buffer.truncate(bytes_read);
+                    Ok(Value::String(String::from_utf8_lossy(&buffer).to_string()))
+                }
+                FileHandle::Text(_, _) => {
+                    Err(RuntimeError::Custom("Get not supported for text files".to_string()))
+                }
+            }
+        } else {
+            Err(RuntimeError::Custom(format!("File #{} not open", file_num)))
+        }
+    })
+}
+
+/// Put #filenumber, , data - Write data to binary file
+pub fn put_file_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() < 2 {
+        return Err(RuntimeError::Custom("Put requires filenumber and data".to_string()));
+    }
+    
+    let file_num = args[0].as_integer()?;
+    let data = args[1].as_string();
+    
+    FILE_HANDLES.with(|handles| {
+        let handles = handles.borrow();
+        if let Some(handle_rc) = handles.get(&file_num) {
+            let mut handle = handle_rc.borrow_mut();
+            match &mut *handle {
+                FileHandle::Binary(file) => {
+                    file.write_all(data.as_bytes())
+                        .map_err(|e| RuntimeError::Custom(format!("Put error: {}", e)))?;
+                    Ok(Value::Nothing)
+                }
+                FileHandle::Text(_, _) => {
+                    Err(RuntimeError::Custom("Put not supported for text files".to_string()))
+                }
+            }
+        } else {
+            Err(RuntimeError::Custom(format!("File #{} not open", file_num)))
+        }
+    })
 }
 
 pub fn file_delete_fn(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -57,7 +323,7 @@ pub fn file_delete_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         return Err(RuntimeError::Custom("File.Delete requires a path argument".to_string()));
     }
     let path = args[0].as_string();
-    match fs::remove_file(&path) {
+    match std::fs::remove_file(&path) {
         Ok(_) => Ok(Value::Nothing),
         Err(e) => Err(RuntimeError::Custom(format!("File.Delete error: {}", e))),
     }
@@ -69,7 +335,7 @@ pub fn file_copy_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     }
     let src = args[0].as_string();
     let dst = args[1].as_string();
-    match fs::copy(&src, &dst) {
+    match std::fs::copy(&src, &dst) {
         Ok(_) => Ok(Value::Nothing),
         Err(e) => Err(RuntimeError::Custom(format!("File.Copy error: {}", e))),
     }
@@ -81,7 +347,7 @@ pub fn file_move_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     }
     let src = args[0].as_string();
     let dst = args[1].as_string();
-    match fs::rename(&src, &dst) {
+    match std::fs::rename(&src, &dst) {
         Ok(_) => Ok(Value::Nothing),
         Err(e) => Err(RuntimeError::Custom(format!("File.Move error: {}", e))),
     }
@@ -92,7 +358,7 @@ pub fn file_readalllines_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         return Err(RuntimeError::Custom("File.ReadAllLines requires a path argument".to_string()));
     }
     let path = args[0].as_string();
-    match fs::read_to_string(&path) {
+    match std::fs::read_to_string(&path) {
         Ok(content) => {
             let lines: Vec<Value> = content.lines().map(|l| Value::String(l.to_string())).collect();
             Ok(Value::Array(lines))
@@ -116,7 +382,7 @@ pub fn directory_createdirectory_fn(args: &[Value]) -> Result<Value, RuntimeErro
         return Err(RuntimeError::Custom("Directory.CreateDirectory requires a path argument".to_string()));
     }
     let path = args[0].as_string();
-    match fs::create_dir_all(&path) {
+    match std::fs::create_dir_all(&path) {
         Ok(_) => Ok(Value::Nothing),
         Err(e) => Err(RuntimeError::Custom(format!("Directory.CreateDirectory error: {}", e))),
     }
@@ -127,7 +393,7 @@ pub fn directory_delete_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         return Err(RuntimeError::Custom("Directory.Delete requires a path argument".to_string()));
     }
     let path = args[0].as_string();
-    match fs::remove_dir_all(&path) {
+    match std::fs::remove_dir_all(&path) {
         Ok(_) => Ok(Value::Nothing),
         Err(e) => Err(RuntimeError::Custom(format!("Directory.Delete error: {}", e))),
     }
@@ -138,7 +404,7 @@ pub fn directory_getfiles_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         return Err(RuntimeError::Custom("Directory.GetFiles requires a path argument".to_string()));
     }
     let path = args[0].as_string();
-    match fs::read_dir(&path) {
+    match std::fs::read_dir(&path) {
         Ok(entries) => {
             let files: Vec<Value> = entries
                 .filter_map(|e| e.ok())
@@ -156,7 +422,7 @@ pub fn directory_getdirectories_fn(args: &[Value]) -> Result<Value, RuntimeError
         return Err(RuntimeError::Custom("Directory.GetDirectories requires a path argument".to_string()));
     }
     let path = args[0].as_string();
-    match fs::read_dir(&path) {
+    match std::fs::read_dir(&path) {
         Ok(entries) => {
             let dirs: Vec<Value> = entries
                 .filter_map(|e| e.ok())
@@ -284,7 +550,7 @@ pub fn dir_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         (Path::new("."), pattern.clone())
     };
     
-    match fs::read_dir(dir) {
+    match std::fs::read_dir(dir) {
         Ok(entries) => {
             let mut files = Vec::new();
             for entry in entries.flatten() {
@@ -359,7 +625,7 @@ pub fn filecopy_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     let source = args[0].as_string();
     let dest = args[1].as_string();
     
-    fs::copy(&source, &dest)
+    std::fs::copy(&source, &dest)
         .map(|_| Value::Nothing)
         .map_err(|e| RuntimeError::Custom(format!("FileCopy error: {}", e)))
 }
@@ -372,7 +638,7 @@ pub fn kill_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     
     let path = args[0].as_string();
     
-    fs::remove_file(&path)
+    std::fs::remove_file(&path)
         .map(|_| Value::Nothing)
         .map_err(|e| RuntimeError::Custom(format!("Kill error: {}", e)))
 }
@@ -386,7 +652,7 @@ pub fn name_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     let old_path = args[0].as_string();
     let new_path = args[1].as_string();
     
-    fs::rename(&old_path, &new_path)
+    std::fs::rename(&old_path, &new_path)
         .map(|_| Value::Nothing)
         .map_err(|e| RuntimeError::Custom(format!("Name error: {}", e)))
 }
@@ -399,7 +665,7 @@ pub fn getattr_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     
     let path = args[0].as_string();
     
-    match fs::metadata(&path) {
+    match std::fs::metadata(&path) {
         Ok(metadata) => {
             let mut attrs = 0;
             
@@ -443,7 +709,7 @@ pub fn setattr_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let metadata = fs::metadata(&path)
+        let metadata = std::fs::metadata(&path)
             .map_err(|e| RuntimeError::Custom(format!("SetAttr error: {}", e)))?;
         let mut permissions = metadata.permissions();
         
@@ -454,7 +720,7 @@ pub fn setattr_fn(args: &[Value]) -> Result<Value, RuntimeError> {
             permissions.set_mode(permissions.mode() | 0o200);
         }
         
-        fs::set_permissions(&path, permissions)
+        std::fs::set_permissions(&path, permissions)
             .map(|_| Value::Nothing)
             .map_err(|e| RuntimeError::Custom(format!("SetAttr error: {}", e)))
     }
@@ -479,7 +745,7 @@ pub fn filedatetime_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     
     let path = args[0].as_string();
     
-    match fs::metadata(&path) {
+    match std::fs::metadata(&path) {
         Ok(metadata) => {
             let modified = metadata.modified()
                 .map_err(|e| RuntimeError::Custom(format!("FileDateTime error: {}", e)))?;
@@ -500,7 +766,7 @@ pub fn filelen_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     
     let path = args[0].as_string();
     
-    match fs::metadata(&path) {
+    match std::fs::metadata(&path) {
         Ok(metadata) => Ok(Value::Long(metadata.len() as i64)),
         Err(e) => Err(RuntimeError::Custom(format!("FileLen error: {}", e))),
     }
@@ -535,7 +801,7 @@ pub fn mkdir_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     
     let path = args[0].as_string();
     
-    fs::create_dir(&path)
+    std::fs::create_dir(&path)
         .map(|_| Value::Nothing)
         .map_err(|e| RuntimeError::Custom(format!("MkDir error: {}", e)))
 }
@@ -548,7 +814,7 @@ pub fn rmdir_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     
     let path = args[0].as_string();
     
-    fs::remove_dir(&path)
+    std::fs::remove_dir(&path)
         .map(|_| Value::Nothing)
         .map_err(|e| RuntimeError::Custom(format!("RmDir error: {}", e)))
 }
@@ -646,7 +912,7 @@ pub fn loadpicture_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     }
     
     // Read file metadata
-    match fs::metadata(&path) {
+    match std::fs::metadata(&path) {
         Ok(metadata) => {
             use std::rc::Rc;
             use std::cell::RefCell;
@@ -697,7 +963,7 @@ pub fn savepicture_fn(args: &[Value]) -> Result<Value, RuntimeError> {
         let obj = obj_ref.borrow();
         if let Some(Value::String(source)) = obj.fields.get("filename") {
             // Copy source file to destination
-            match fs::copy(source, &dest_path) {
+            match std::fs::copy(source, &dest_path) {
                 Ok(_) => return Ok(Value::Nothing),
                 Err(e) => return Err(RuntimeError::Custom(format!("SavePicture error: {}", e))),
             }
@@ -705,7 +971,7 @@ pub fn savepicture_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     }
     
     // If we can't extract source, just create an empty file
-    match fs::write(&dest_path, b"") {
+    match std::fs::write(&dest_path, b"") {
         Ok(_) => Ok(Value::Nothing),
         Err(e) => Err(RuntimeError::Custom(format!("SavePicture error: {}", e))),
     }

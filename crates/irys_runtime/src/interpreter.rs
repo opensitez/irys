@@ -962,6 +962,24 @@ impl Interpreter {
                             if should_exit { break; }
                         }
                     }
+                    Value::Collection(coll_rc) => {
+                        // Support Collection/ArrayList iteration
+                        let coll = coll_rc.borrow();
+                        self.env.define(variable.as_str(), Value::Nothing);
+                        for item in &coll.items {
+                            self.env.set(variable.as_str(), item.clone())?;
+                            let mut should_exit = false;
+                            for s in body {
+                                match self.execute(s) {
+                                    Err(RuntimeError::Exit(ExitType::For)) => { should_exit = true; break; }
+                                    Err(RuntimeError::Continue(irys_parser::ast::stmt::ContinueType::For)) => break,
+                                    Err(e) => return Err(e),
+                                    Ok(()) => {}
+                                }
+                            }
+                            if should_exit { break; }
+                        }
+                    }
                     Value::String(s) => {
                         self.env.define(variable.as_str(), Value::String(String::new()));
                         for ch in s.chars() {
@@ -978,7 +996,7 @@ impl Interpreter {
                             if should_exit { break; }
                         }
                     }
-                    _ => return Err(RuntimeError::Custom("For Each requires an array or string".to_string())),
+                    _ => return Err(RuntimeError::Custom("For Each requires an array, collection, or string".to_string())),
                 }
                 Ok(())
             }
@@ -1836,8 +1854,11 @@ impl Interpreter {
             "cushort" => return cushort_fn(&arg_values),
             "cuint" => return cuint_fn(&arg_values),
             "culng" => return culng_fn(&arg_values),
+            "csbyte" => return csbyte_fn(&arg_values),
             "ascw" => return ascw_fn(&arg_values),
             "chrw" | "chrw$" => return chrw_fn(&arg_values),
+            "oct" | "oct$" => return oct_fn(&arg_values),
+            "hex" | "hex$" => return hex_fn(&arg_values),
 
             // DateTime functions additions
             "dateadd" => return dateadd_fn(&arg_values),
@@ -1880,6 +1901,14 @@ impl Interpreter {
             "fileattr" => return fileattr_fn(&arg_values),
             "input" => return input_fn(&arg_values),
             "inputb" => return inputb_fn(&arg_values),
+            "open" => return open_file_fn(&arg_values),
+            "close" => return close_file_fn(&arg_values),
+            "print" => return print_file_fn(&arg_values),
+            "write" => return write_file_fn(&arg_values),
+            "lineinput" => return line_input_fn(&arg_values),
+            "seek" => return seek_file_fn(&arg_values),
+            "get" => return get_file_fn(&arg_values),
+            "put" => return put_file_fn(&arg_values),
             
             // Image functions
             "loadpicture" => return loadpicture_fn(&arg_values),
@@ -1898,6 +1927,36 @@ impl Interpreter {
             "screen" => return screen_fn(&arg_values),
             "clipboard" => return clipboard_fn(&arg_values),
             "forms" => return forms_fn(&arg_values),
+
+            // System.Text functions
+            "stringbuilder" => return stringbuilder_new_fn(&arg_values),
+            
+            // Encoding functions
+            "encoding.ascii.getbytes" => return encoding_ascii_getbytes_fn(&arg_values),
+            "encoding.ascii.getstring" => return encoding_ascii_getstring_fn(&arg_values),
+            "encoding.utf8.getbytes" => return encoding_utf8_getbytes_fn(&arg_values),
+            "encoding.utf8.getstring" => return encoding_utf8_getstring_fn(&arg_values),
+            "encoding.unicode.getbytes" => return encoding_unicode_getbytes_fn(&arg_values),
+            "encoding.unicode.getstring" => return encoding_unicode_getstring_fn(&arg_values),
+            "encoding.default.getbytes" => return encoding_default_getbytes_fn(&arg_values),
+            "encoding.default.getstring" => return encoding_default_getstring_fn(&arg_values),
+            "encoding.getencoding" => return encoding_getencoding_fn(&arg_values),
+            "encoding.convert" => return encoding_convert_fn(&arg_values),
+            
+            // Regex functions
+            "regex.ismatch" => return regex_ismatch_fn(&arg_values),
+            "regex.match" => return regex_match_fn(&arg_values),
+            "regex.matches" => return regex_matches_fn(&arg_values),
+            "regex.replace" => return regex_replace_fn(&arg_values),
+            "regex.split" => return regex_split_fn(&arg_values),
+            
+            // JSON functions
+            "jsonserializer.serialize" | "json.serialize" => return json_serialize_fn(&arg_values),
+            "jsonserializer.deserialize" | "json.deserialize" => return json_deserialize_fn(&arg_values),
+            
+            // XML functions
+            "xdocument.parse" | "xml.parse" => return xml_parse_fn(&arg_values),
+            "xdocument.save" | "xml.save" => return xml_save_fn(&arg_values),
 
             // Financial functions
             "pmt" => return pmt_fn(&arg_values),
@@ -1951,6 +2010,18 @@ impl Interpreter {
 
         // Evaluate object to check if it's a Collection or Dialog
         if let Ok(obj_val) = self.evaluate_expr(obj) {
+            // Handle StringBuilder methods
+            if let Value::Object(obj_ref) = &obj_val {
+                if let Some(Value::String(type_name)) = obj_ref.borrow().fields.get("__type") {
+                    if type_name == "StringBuilder" {
+                        let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                            .map(|arg| self.evaluate_expr(arg))
+                            .collect();
+                        return stringbuilder_method_fn(&method_name, &obj_val, &arg_values?);
+                    }
+                }
+            }
+            
             // Handle Dialog ShowDialog method
             if method_name == "showdialog" {
                 if let Value::Object(obj_ref) = &obj_val {

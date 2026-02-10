@@ -12,6 +12,9 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 chrono = "0.4"
 rfd = { workspace = true }
+regex = "1.10"
+serde_json = "1.0"
+quick-xml = "0.31"
 
 [dev-dependencies]
 pest = { workspace = true }

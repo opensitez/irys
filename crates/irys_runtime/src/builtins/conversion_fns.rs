@@ -285,6 +285,18 @@ pub fn culng_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Long(val as i64))
 }
 
+/// CSByte(expression) - Convert to Signed Byte (-128 to 127)
+pub fn csbyte_fn(args: &[Value]) -> Result<Value, RuntimeError> {
+    if args.len() != 1 {
+        return Err(RuntimeError::Custom("CSByte requires exactly one argument".to_string()));
+    }
+    let val = args[0].as_integer()?;
+    if val < i8::MIN as i32 || val > i8::MAX as i32 {
+        return Err(RuntimeError::Custom("Overflow in CSByte conversion".to_string()));
+    }
+    Ok(Value::Integer(val))
+}
+
 /// AscW(string) - Returns Unicode code point of first character
 pub fn ascw_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     if args.len() != 1 {

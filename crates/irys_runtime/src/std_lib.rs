@@ -65,6 +65,8 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
             use crate::builtins::isnull_fn;
             isnull_fn(args)
         }
+        
+        // Conversion functions
         "ccur" => {
             use crate::builtins::ccur_fn;
             ccur_fn(args)
@@ -73,6 +75,12 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
             use crate::builtins::cvar_fn;
             cvar_fn(args)
         }
+        "csbyte" => {
+            use crate::builtins::csbyte_fn;
+            csbyte_fn(args)
+        }
+        
+        // System objects
         "app" => {
             use crate::builtins::app_fn;
             app_fn(args)
@@ -88,6 +96,130 @@ pub fn call_builtin(name: &str, args: &[Value]) -> Result<Value, RuntimeError> {
         "forms" => {
             use crate::builtins::forms_fn;
             forms_fn(args)
+        }
+        
+        // System.Text
+        "stringbuilder" => {
+            use crate::builtins::stringbuilder_new_fn;
+            stringbuilder_new_fn(args)
+        }
+        
+        // Encoding
+        "encoding.ascii.getbytes" => {
+            use crate::builtins::encoding_ascii_getbytes_fn;
+            encoding_ascii_getbytes_fn(args)
+        }
+        "encoding.ascii.getstring" => {
+            use crate::builtins::encoding_ascii_getstring_fn;
+            encoding_ascii_getstring_fn(args)
+        }
+        "encoding.utf8.getbytes" => {
+            use crate::builtins::encoding_utf8_getbytes_fn;
+            encoding_utf8_getbytes_fn(args)
+        }
+        "encoding.utf8.getstring" => {
+            use crate::builtins::encoding_utf8_getstring_fn;
+            encoding_utf8_getstring_fn(args)
+        }
+        "encoding.unicode.getbytes" => {
+            use crate::builtins::encoding_unicode_getbytes_fn;
+            encoding_unicode_getbytes_fn(args)
+        }
+        "encoding.unicode.getstring" => {
+            use crate::builtins::encoding_unicode_getstring_fn;
+            encoding_unicode_getstring_fn(args)
+        }
+        "encoding.default.getbytes" => {
+            use crate::builtins::encoding_default_getbytes_fn;
+            encoding_default_getbytes_fn(args)
+        }
+        "encoding.default.getstring" => {
+            use crate::builtins::encoding_default_getstring_fn;
+            encoding_default_getstring_fn(args)
+        }
+        "encoding.getencoding" => {
+            use crate::builtins::encoding_getencoding_fn;
+            encoding_getencoding_fn(args)
+        }
+        "encoding.convert" => {
+            use crate::builtins::encoding_convert_fn;
+            encoding_convert_fn(args)
+        }
+        
+        // Regex
+        "regex.ismatch" => {
+            use crate::builtins::regex_ismatch_fn;
+            regex_ismatch_fn(args)
+        }
+        "regex.match" => {
+            use crate::builtins::regex_match_fn;
+            regex_match_fn(args)
+        }
+        "regex.matches" => {
+            use crate::builtins::regex_matches_fn;
+            regex_matches_fn(args)
+        }
+        "regex.replace" => {
+            use crate::builtins::regex_replace_fn;
+            regex_replace_fn(args)
+        }
+        "regex.split" => {
+            use crate::builtins::regex_split_fn;
+            regex_split_fn(args)
+        }
+        
+        // JSON
+        "jsonserializer.serialize" | "json.serialize" => {
+            use crate::builtins::json_serialize_fn;
+            json_serialize_fn(args)
+        }
+        "jsonserializer.deserialize" | "json.deserialize" => {
+            use crate::builtins::json_deserialize_fn;
+            json_deserialize_fn(args)
+        }
+        
+        // XML
+        "xdocument.parse" | "xml.parse" => {
+            use crate::builtins::xml_parse_fn;
+            xml_parse_fn(args)
+        }
+        "xdocument.save" | "xml.save" => {
+            use crate::builtins::xml_save_fn;
+            xml_save_fn(args)
+        }
+        
+        // File I/O
+        "open" => {
+            use crate::builtins::open_file_fn;
+            open_file_fn(args)
+        }
+        "close" => {
+            use crate::builtins::close_file_fn;
+            close_file_fn(args)
+        }
+        "print" => {
+            use crate::builtins::print_file_fn;
+            print_file_fn(args)
+        }
+        "write" => {
+            use crate::builtins::write_file_fn;
+            write_file_fn(args)
+        }
+        "lineinput" => {
+            use crate::builtins::line_input_fn;
+            line_input_fn(args)
+        }
+        "seek" => {
+            use crate::builtins::seek_file_fn;
+            seek_file_fn(args)
+        }
+        "get" => {
+            use crate::builtins::get_file_fn;
+            get_file_fn(args)
+        }
+        "put" => {
+            use crate::builtins::put_file_fn;
+            put_file_fn(args)
         }
         
         _ => Err(RuntimeError::UndefinedFunction(name.to_string())),
