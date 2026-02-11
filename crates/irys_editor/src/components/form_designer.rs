@@ -103,7 +103,8 @@ pub fn FormDesigner() -> Element {
                 // Handle Pending State
                 if matches!(ds.mode, DragMode::Pending) {
                     if delta_x.abs() > 5 || delta_y.abs() > 5 {
-                        // Threshold passed, switch to Move
+                        // Threshold passed, switch to Move — snapshot for undo
+                        state.push_undo_snapshot();
                         ds.mode = DragMode::Move;
                         drag_state.set(Some(ds)); // Update state to trigger pointer-events: none
                     }
@@ -240,6 +241,19 @@ pub fn FormDesigner() -> Element {
                     let all_ids: Vec<Uuid> = form.controls.iter().map(|c| c.id).collect();
                     selected_controls.set(all_ids);
                 }
+            }
+            Key::Character(ref c) if is_ctrl_or_meta && (c == "z" || c == "Z") => {
+                if modifiers.contains(Modifiers::SHIFT) {
+                    // Ctrl+Shift+Z = Redo
+                    state.redo();
+                } else {
+                    // Ctrl+Z = Undo
+                    state.undo();
+                }
+            }
+            Key::Character(ref c) if is_ctrl_or_meta && (c == "y" || c == "Y") => {
+                // Ctrl+Y = Redo
+                state.redo();
             }
             _ => {}
         }
@@ -579,7 +593,8 @@ fn RecursiveControlItem(
             if is_selected && selected_controls.read().len() == 1 {
                 ResizeHandles { 
                     control_bounds: control.bounds, 
-                    drag_state: drag_state
+                    drag_state: drag_state,
+                    state: state
                 }
             }
         }
@@ -804,7 +819,7 @@ fn ControlVisuals(control: Control) -> Element {
 }
 
 #[component]
-fn ResizeHandles(control_bounds: Bounds, drag_state: Signal<Option<DragState>>) -> Element {
+fn ResizeHandles(control_bounds: Bounds, drag_state: Signal<Option<DragState>>, state: AppState) -> Element {
     let handle_style = "position: absolute; width: 6px; height: 6px; background: #0078d4; border: 1px solid white;";
     
     let make_handle = move |pos: HandlePosition, top, left, cursor| {
@@ -813,6 +828,8 @@ fn ResizeHandles(control_bounds: Bounds, drag_state: Signal<Option<DragState>>) 
                 style: "{handle_style} top: {top}; left: {left}; cursor: {cursor};",
                 onmousedown: move |evt| {
                     evt.stop_propagation();
+                    // Push undo snapshot before resize starts
+                    state.push_undo_snapshot();
                     drag_state.set(Some(DragState {
                         start_x: evt.client_coordinates().x as i32,
                         start_y: evt.client_coordinates().y as i32,

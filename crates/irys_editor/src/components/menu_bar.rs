@@ -106,9 +106,28 @@ pub fn MenuBar() -> Element {
                         {
                             let has_selection = !state.selected_controls.read().is_empty();
                             let has_clipboard = !state.clipboard_controls.read().is_empty();
+                            let can_undo = state.can_undo();
+                            let can_redo = state.can_redo();
                             let disabled_style = "padding: 6px 12px; color: #999; cursor: default;";
                             let enabled_style = dropdown_item_style;
                             rsx! {
+                                div {
+                                    style: if can_undo { enabled_style } else { disabled_style },
+                                    onclick: move |_| {
+                                        state.undo();
+                                        close_menu();
+                                    },
+                                    "Undo   Ctrl+Z"
+                                }
+                                div {
+                                    style: if can_redo { enabled_style } else { disabled_style },
+                                    onclick: move |_| {
+                                        state.redo();
+                                        close_menu();
+                                    },
+                                    "Redo   Ctrl+Y"
+                                }
+                                div { style: "height: 1px; background: #eee; margin: 2px 0;" }
                                 div {
                                     style: if has_selection { enabled_style } else { disabled_style },
                                     onclick: move |_| {

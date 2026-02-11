@@ -3,8 +3,24 @@ use dioxus::prelude::*;
 use irys_forms::{ControlType, Form};
 use irys_project::Project;
 use rfd::FileDialog;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
+
+/// Maximum number of undo snapshots kept per form.
+const MAX_UNDO_HISTORY: usize = 50;
+
+/// A snapshot of a form's state that can be restored via undo/redo.
+#[derive(Clone, Debug)]
+pub struct FormSnapshot {
+    pub controls: Vec<irys_forms::Control>,
+    pub width: i32,
+    pub height: i32,
+    pub caption: String,
+    pub back_color: Option<String>,
+    pub fore_color: Option<String>,
+    pub font: Option<String>,
+}
 
 // Helper function to strip HTML tags for plain text
 fn strip_html_tags(html: &str) -> String {
@@ -30,7 +46,7 @@ fn strip_html_tags(html: &str) -> String {
         .replace("&#39;", "'")
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct AppState {
     pub project: Signal<Option<Project>>,
     pub current_form: Signal<Option<String>>,
@@ -45,6 +61,10 @@ pub struct AppState {
     pub show_project_properties: Signal<bool>,
     pub show_resources: Signal<bool>,
     pub clipboard_controls: Signal<Vec<irys_forms::Control>>,
+    /// Per-form undo stacks keyed by form name.
+    pub undo_stacks: Signal<HashMap<String, Vec<FormSnapshot>>>,
+    /// Per-form redo stacks keyed by form name.
+    pub redo_stacks: Signal<HashMap<String, Vec<FormSnapshot>>>,
 }
 
 impl AppState {
@@ -63,6 +83,8 @@ impl AppState {
             show_project_properties: Signal::new(false),
             show_resources: Signal::new(false),
             clipboard_controls: Signal::new(Vec::new()),
+            undo_stacks: Signal::new(HashMap::new()),
+            redo_stacks: Signal::new(HashMap::new()),
         }
     }
     
@@ -75,6 +97,174 @@ impl AppState {
         } else {
             None
         }
+    }
+
+    // ── Undo / Redo ───────────────────────────────────────────────────
+
+    /// Capture the current form's state and push it onto the undo stack.
+    /// Call this **before** any mutation.  Clears the redo stack for the
+    /// current form (because a new action invalidates the redo future).
+    pub fn push_undo_snapshot(&self) {
+        let project = self.project.read();
+        let form_name = self.current_form.read();
+
+        if let (Some(proj), Some(name)) = (project.as_ref(), form_name.as_ref()) {
+            if let Some(fm) = proj.get_form(name) {
+                let snapshot = FormSnapshot {
+                    controls: fm.form.controls.clone(),
+                    width: fm.form.width,
+                    height: fm.form.height,
+                    caption: fm.form.caption.clone(),
+                    back_color: fm.form.back_color.clone(),
+                    fore_color: fm.form.fore_color.clone(),
+                    font: fm.form.font.clone(),
+                };
+
+                let mut undo = self.undo_stacks;
+                let mut stacks = undo.write();
+                let stack = stacks.entry(name.clone()).or_insert_with(Vec::new);
+                stack.push(snapshot);
+                if stack.len() > MAX_UNDO_HISTORY {
+                    stack.remove(0);
+                }
+
+                // Any new action invalidates redo history
+                let mut redo = self.redo_stacks;
+                let mut redo_stacks = redo.write();
+                redo_stacks.remove(name);
+            }
+        }
+    }
+
+    /// Undo: restore the most recent snapshot, pushing the *current*
+    /// state onto the redo stack first.
+    pub fn undo(&self) {
+        let form_name_opt = self.current_form.read().clone();
+        let Some(name) = form_name_opt else { return };
+
+        // Pop from undo stack
+        let snapshot = {
+            let mut undo = self.undo_stacks;
+            let mut stacks = undo.write();
+            let stack = stacks.get_mut(&name);
+            match stack {
+                Some(s) if !s.is_empty() => s.pop().unwrap(),
+                _ => return,
+            }
+        };
+
+        // Push current state onto redo stack
+        {
+            let project = self.project.read();
+            if let Some(proj) = project.as_ref() {
+                if let Some(fm) = proj.get_form(&name) {
+                    let current = FormSnapshot {
+                        controls: fm.form.controls.clone(),
+                        width: fm.form.width,
+                        height: fm.form.height,
+                        caption: fm.form.caption.clone(),
+                        back_color: fm.form.back_color.clone(),
+                        fore_color: fm.form.fore_color.clone(),
+                        font: fm.form.font.clone(),
+                    };
+                    let mut redo = self.redo_stacks;
+                    let mut stacks = redo.write();
+                    let stack = stacks.entry(name.clone()).or_insert_with(Vec::new);
+                    stack.push(current);
+                }
+            }
+        }
+
+        // Apply the snapshot
+        self.apply_snapshot(&name, snapshot);
+    }
+
+    /// Redo: restore the most recent redo snapshot, pushing the current
+    /// state back onto the undo stack.
+    pub fn redo(&self) {
+        let form_name_opt = self.current_form.read().clone();
+        let Some(name) = form_name_opt else { return };
+
+        // Pop from redo stack
+        let snapshot = {
+            let mut redo = self.redo_stacks;
+            let mut stacks = redo.write();
+            let stack = stacks.get_mut(&name);
+            match stack {
+                Some(s) if !s.is_empty() => s.pop().unwrap(),
+                _ => return,
+            }
+        };
+
+        // Push current state onto undo stack (without clearing redo)
+        {
+            let project = self.project.read();
+            if let Some(proj) = project.as_ref() {
+                if let Some(fm) = proj.get_form(&name) {
+                    let current = FormSnapshot {
+                        controls: fm.form.controls.clone(),
+                        width: fm.form.width,
+                        height: fm.form.height,
+                        caption: fm.form.caption.clone(),
+                        back_color: fm.form.back_color.clone(),
+                        fore_color: fm.form.fore_color.clone(),
+                        font: fm.form.font.clone(),
+                    };
+                    let mut undo = self.undo_stacks;
+                    let mut stacks = undo.write();
+                    let stack = stacks.entry(name.clone()).or_insert_with(Vec::new);
+                    stack.push(current);
+                }
+            }
+        }
+
+        // Apply the snapshot
+        self.apply_snapshot(&name, snapshot);
+    }
+
+    /// Returns true when there is at least one undo snapshot for the current form.
+    pub fn can_undo(&self) -> bool {
+        let form_name = self.current_form.read();
+        if let Some(name) = form_name.as_ref() {
+            let stacks = self.undo_stacks.read();
+            stacks.get(name).map_or(false, |s| !s.is_empty())
+        } else {
+            false
+        }
+    }
+
+    /// Returns true when there is at least one redo snapshot for the current form.
+    pub fn can_redo(&self) -> bool {
+        let form_name = self.current_form.read();
+        if let Some(name) = form_name.as_ref() {
+            let stacks = self.redo_stacks.read();
+            stacks.get(name).map_or(false, |s| !s.is_empty())
+        } else {
+            false
+        }
+    }
+
+    /// Apply a `FormSnapshot` to the form, replacing its current state.
+    fn apply_snapshot(&self, form_name: &str, snapshot: FormSnapshot) {
+        let mut project_signal = self.project;
+        let mut project_write = project_signal.write();
+
+        if let Some(proj) = project_write.as_mut() {
+            if let Some(form_module) = proj.get_form_mut(form_name) {
+                form_module.form.controls = snapshot.controls;
+                form_module.form.width = snapshot.width;
+                form_module.form.height = snapshot.height;
+                form_module.form.caption = snapshot.caption;
+                form_module.form.back_color = snapshot.back_color;
+                form_module.form.fore_color = snapshot.fore_color;
+                form_module.form.font = snapshot.font;
+                form_module.sync_designer_code();
+            }
+        }
+
+        // Clear selection since control IDs may have changed
+        let mut selected = self.selected_controls;
+        selected.set(Vec::new());
     }
 
     pub fn new_project(&self) {
@@ -230,6 +420,8 @@ impl AppState {
 
 
     pub fn update_control_property(&self, control_id: uuid::Uuid, property: &str, value: String) {
+        self.push_undo_snapshot();
+
         let mut project_signal = self.project;
         let mut project_write = project_signal.write();
         let form_name = self.current_form.read();
@@ -391,6 +583,8 @@ impl AppState {
     }
 
     pub fn add_control_at(&self, control_type: ControlType, x: i32, y: i32) {
+        self.push_undo_snapshot();
+
         let mut project_signal = self.project;
         let mut project_write = project_signal.write();
         let form_name = self.current_form.read();
@@ -445,6 +639,8 @@ impl AppState {
     }
 
     pub fn update_form_property(&self, property: &str, value: String) {
+        self.push_undo_snapshot();
+
         let mut project_signal = self.project;
         let mut project_write = project_signal.write();
         let form_name = self.current_form.read();
@@ -529,6 +725,8 @@ impl AppState {
         let sel = self.selected_controls.read().clone();
         if sel.is_empty() { return; }
 
+        self.push_undo_snapshot();
+
         let mut project_signal = self.project;
         let mut project_write = project_signal.write();
         let form_name = self.current_form.read();
@@ -589,6 +787,8 @@ impl AppState {
         let clipboard_list = self.clipboard_controls.read().clone();
         if clipboard_list.is_empty() { return; }
 
+        self.push_undo_snapshot();
+
         let mut project_signal = self.project;
         let mut project_write = project_signal.write();
         let form_name = self.current_form.read();
@@ -644,6 +844,8 @@ impl AppState {
         if Some(control_id) == new_parent_id {
             return; // Cannot reparent to self
         }
+
+        self.push_undo_snapshot();
 
         let mut project_signal = self.project;
         let mut project_write = project_signal.write();
