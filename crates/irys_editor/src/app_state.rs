@@ -839,6 +839,38 @@ impl AppState {
         }
     }
 
+    /// Remove a named item (form or code file) from the project.
+    /// Returns true if something was removed.
+    pub fn remove_project_item(&self, name: &str) -> bool {
+        let mut project_signal = self.project;
+        let mut project_write = project_signal.write();
+        if let Some(proj) = project_write.as_mut() {
+            let removed = proj.remove_form(name) || proj.remove_code_file(name);
+            if removed {
+                // If the removed item was currently selected, switch to the first available item
+                let current = self.current_form.read().clone();
+                if current.as_deref() == Some(name) {
+                    let next_form = proj.forms.first().map(|f| f.form.name.clone());
+                    let next_code = proj.code_files.first().map(|f| f.name.clone());
+                    drop(project_write);
+                    let mut form_signal = self.current_form;
+                    let mut code_signal = self.show_code_editor;
+                    if let Some(fname) = next_form {
+                        form_signal.set(Some(fname));
+                        code_signal.set(false);
+                    } else if let Some(cname) = next_code {
+                        form_signal.set(Some(cname));
+                        code_signal.set(true);
+                    } else {
+                        form_signal.set(None);
+                    }
+                }
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn delete_selected_control(&self) {
         let sel = self.selected_controls.read().clone();
         if sel.is_empty() { return; }

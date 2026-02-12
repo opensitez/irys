@@ -187,6 +187,18 @@ impl Project {
         self.code_files.push(code_file);
     }
 
+    pub fn remove_form(&mut self, name: &str) -> bool {
+        let len = self.forms.len();
+        self.forms.retain(|f| f.form.name != name);
+        self.forms.len() < len
+    }
+
+    pub fn remove_code_file(&mut self, name: &str) -> bool {
+        let len = self.code_files.len();
+        self.code_files.retain(|cf| cf.name != name);
+        self.code_files.len() < len
+    }
+
     pub fn get_form(&self, name: &str) -> Option<&FormModule> {
         self.forms.iter().find(|f| f.form.name == name)
     }

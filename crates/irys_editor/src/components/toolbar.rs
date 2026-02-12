@@ -7,6 +7,7 @@ pub fn Toolbar() -> Element {
     let run_mode = *state.run_mode.read();
     let mut show_add_dropdown = use_signal(|| false);
     let mut show_add_existing_dropdown = use_signal(|| false);
+    let mut show_remove_confirm = use_signal(|| false);
 
     rsx! {
         div {
@@ -293,6 +294,59 @@ pub fn Toolbar() -> Element {
                     div {
                         style: "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1000;",
                         onclick: move |_| show_add_existing_dropdown.set(false)
+                    }
+                }
+            }
+
+            // Remove current item button
+            {
+                let has_item = state.current_form.read().is_some();
+                let opacity = if has_item { "1.0" } else { "0.5" };
+                let pe = if has_item { "auto" } else { "none" };
+                rsx! {
+                    button {
+                        style: "padding: 4px 8px; font-size: 12px; cursor: pointer; border: 1px solid #c00; background: white; border-radius: 3px; display: flex; align-items: center; gap: 4px; color: #c00; opacity: {opacity}; pointer-events: {pe};",
+                        title: "Remove Current Item",
+                        onclick: move |_| {
+                            show_remove_confirm.set(true);
+                        },
+                        "🗑 Remove"
+                    }
+                }
+            }
+        }
+
+        // Confirmation dialog for Remove button
+        if *show_remove_confirm.read() {
+            if let Some(item_name) = state.current_form.read().clone() {
+                div {
+                    style: "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.3); z-index: 3000; display: flex; align-items: center; justify-content: center;",
+                    div {
+                        style: "background: white; border: 1px solid #ccc; border-radius: 6px; padding: 20px 28px; box-shadow: 4px 4px 12px rgba(0,0,0,0.3); min-width: 300px;",
+                        div {
+                            style: "font-size: 14px; font-weight: bold; margin-bottom: 12px;",
+                            "Remove Item"
+                        }
+                        div {
+                            style: "margin-bottom: 16px; font-size: 13px;",
+                            "Are you sure you want to remove \"{item_name}\" from the project?"
+                        }
+                        div {
+                            style: "display: flex; justify-content: flex-end; gap: 8px;",
+                            button {
+                                style: "padding: 4px 16px; border: 1px solid #ccc; background: #f0f0f0; border-radius: 3px; cursor: pointer;",
+                                onclick: move |_| show_remove_confirm.set(false),
+                                "Cancel"
+                            }
+                            button {
+                                style: "padding: 4px 16px; border: 1px solid #c00; background: #e74c3c; color: white; border-radius: 3px; cursor: pointer;",
+                                onclick: move |_| {
+                                    state.remove_project_item(&item_name);
+                                    show_remove_confirm.set(false);
+                                },
+                                "Remove"
+                            }
+                        }
                     }
                 }
             }
