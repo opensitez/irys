@@ -178,10 +178,10 @@ fn process_side_effects(
                 }
             }
             RuntimeSideEffect::ConsoleOutput(msg) => {
-                println!("[Runtime Console] {}", msg);
+                print!("{}", msg);
             }
             RuntimeSideEffect::ConsoleClear => {
-                println!("[Runtime Console] Cleared");
+                // Console cleared
             }
             RuntimeSideEffect::DataSourceChanged { control_name, columns, rows } => {
                 // Update the DataGridView control's grid data
