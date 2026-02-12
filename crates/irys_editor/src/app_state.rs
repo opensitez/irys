@@ -594,8 +594,18 @@ impl AppState {
                         prop if prop.starts_with("DataBindings.") => {
                             control.properties.set(prop, value);
                         },
+                        // Checked syncs CheckState + Value for .NET compat
+                        "Checked" => {
+                            if let Ok(b) = value.parse::<bool>() {
+                                control.properties.set("Checked", b);
+                                use irys_forms::properties::PropertyValue;
+                                let int_val = if b { 1 } else { 0 };
+                                control.properties.set_raw("CheckState", PropertyValue::Integer(int_val));
+                                control.properties.set_raw("Value", PropertyValue::Integer(int_val));
+                            }
+                        },
                         // Boolean properties stored directly
-                        "Checked" | "ThreeState" | "Multiline" | "ReadOnly" |
+                        "ThreeState" | "Multiline" | "ReadOnly" |
                         "Sorted" | "ShowCheckBox" | "ShowUpDown" |
                         "IsSplitterFixed" | "WrapContents" |
                         "ShowToday" | "ShowWeekNumbers" | "LinkVisited" |
@@ -619,6 +629,15 @@ impl AppState {
                             if let Ok(val) = value.parse::<i32>() {
                                 use irys_forms::properties::PropertyValue;
                                 control.properties.set_raw(property, PropertyValue::Integer(val));
+                            }
+                        },
+                        // CheckState syncs Checked + Value for .NET compat
+                        "CheckState" => {
+                            if let Ok(val) = value.parse::<i32>() {
+                                use irys_forms::properties::PropertyValue;
+                                control.properties.set_raw("CheckState", PropertyValue::Integer(val));
+                                control.properties.set("Checked", val >= 1);
+                                control.properties.set_raw("Value", PropertyValue::Integer(val));
                             }
                         },
                         // String properties stored directly

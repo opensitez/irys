@@ -308,7 +308,7 @@ pub fn PropertiesPanel() -> Element {
                         {
                             let form_name = form.name.clone();
                             let is_vbnet = state.is_current_form_vbnet();
-                            let events = vec!["Load", "Click"]; // basic form events
+                            let events = vec!["Load", "Shown", "Activated", "Deactivate", "FormClosing", "FormClosed", "Resize", "Paint", "Click", "DoubleClick", "KeyDown", "KeyUp", "KeyPress", "MouseClick", "MouseDown", "MouseUp", "MouseMove"];
                             rsx! {
                                 div { style: "font-weight: bold; margin-bottom: 8px;", "Form: {form_name}" }
                                 for event_name in events {
@@ -321,7 +321,15 @@ pub fn PropertiesPanel() -> Element {
                                                 key: "{event_name}",
                                                 style: "padding: 4px; border-bottom: 1px solid #eee; cursor: pointer;",
                                                 onclick: move |_| {
-                                                    let params = "";
+                                                    let params = if is_vbnet {
+                                                        if let Some(et) = irys_forms::EventType::from_name(&evt) {
+                                                            et.parameters().to_string()
+                                                        } else {
+                                                            "sender As Object, e As EventArgs".to_string()
+                                                        }
+                                                    } else {
+                                                        String::new()
+                                                    };
                                                     let current_code = state.get_current_code();
 
                                                     if is_vbnet {
@@ -402,19 +410,16 @@ pub fn PropertiesPanel() -> Element {
                                         irys_forms::ControlType::Label |
                                         irys_forms::ControlType::CheckBox |
                                         irys_forms::ControlType::RadioButton |
-                                        irys_forms::ControlType::Frame |
+                                        irys_forms::ControlType::Frame);
+                                    let has_text = matches!(control.control_type, 
+                                        irys_forms::ControlType::TextBox | 
+                                        irys_forms::ControlType::ComboBox |
+                                        irys_forms::ControlType::MaskedTextBox |
+                                        irys_forms::ControlType::DateTimePicker |
                                         irys_forms::ControlType::LinkLabel |
                                         irys_forms::ControlType::ToolStripMenuItem |
                                         irys_forms::ControlType::ToolStripStatusLabel |
                                         irys_forms::ControlType::TabPage);
-                                    let has_text = matches!(control.control_type, 
-                                        irys_forms::ControlType::TextBox | 
-                                        irys_forms::ControlType::RichTextBox |
-                                        irys_forms::ControlType::ComboBox |
-                                        irys_forms::ControlType::MaskedTextBox |
-                                        irys_forms::ControlType::DateTimePicker |
-                                        irys_forms::ControlType::StatusStrip |
-                                        irys_forms::ControlType::MenuStrip);
                                     let is_non_visual = control.control_type.is_non_visual();
 
                                     rsx! {
@@ -586,24 +591,7 @@ pub fn PropertiesPanel() -> Element {
                                                 }
                                             }
                                             
-                                            // CheckBox Value property
-                                            if matches!(control.control_type, irys_forms::ControlType::CheckBox | irys_forms::ControlType::RadioButton) {
-                                                {
-                                                    let value = control.properties.get_int("Value").unwrap_or(0);
-                                                    rsx! {
-                                                        div { style: "font-weight: bold;", "Value" }
-                                                        select {
-                                                            style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
-                                                            value: "{value}",
-                                                            onchange: move |evt| {
-                                                                state.update_control_property(cid, "Value", evt.value());
-                                                            },
-                                                            option { value: "0", "Unchecked" }
-                                                            option { value: "1", "Checked" }
-                                                        }
-                                                    }
-                                                }
-                                            }
+
                                             
                                             if has_text {
                                                 div { style: "font-weight: bold;", "Text" }
@@ -1528,6 +1516,26 @@ pub fn PropertiesPanel() -> Element {
                                                     }
                                                 }
                                             }
+                                            // CheckBox: CheckState (Unchecked=0, Checked=1, Indeterminate=2)
+                                            if matches!(control.control_type, irys_forms::ControlType::CheckBox) {
+                                                {
+                                                    let check_state = control.properties.get_int("CheckState").unwrap_or(
+                                                        if control.properties.get_bool("Checked").unwrap_or(false) { 1 } else { 0 }
+                                                    );
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "CheckState" }
+                                                        select {
+                                                            value: "{check_state}",
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "CheckState", evt.value());
+                                                            },
+                                                            option { value: "0", "Unchecked" }
+                                                            option { value: "1", "Checked" }
+                                                            option { value: "2", "Indeterminate" }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             // CheckBox: ThreeState
                                             if matches!(control.control_type, irys_forms::ControlType::CheckBox) {
                                                 {
@@ -1603,8 +1611,8 @@ pub fn PropertiesPanel() -> Element {
                                                             onchange: move |evt| {
                                                                 state.update_control_property(cid, "DropDownStyle", evt.value());
                                                             },
-                                                            option { value: "0", "DropDown" }
-                                                            option { value: "1", "Simple" }
+                                                            option { value: "0", "Simple" }
+                                                            option { value: "1", "DropDown" }
                                                             option { value: "2", "DropDownList" }
                                                         }
                                                         div { style: "font-weight: bold;", "Sorted" }

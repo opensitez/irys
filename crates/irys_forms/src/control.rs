@@ -317,13 +317,18 @@ impl Control {
             }
             ControlType::CheckBox => {
                 properties.set("Caption", name.clone());
-                properties.set("Value", 0);
+                properties.set("Checked", false);
+                use crate::properties::PropertyValue;
+                properties.set_raw("CheckState", PropertyValue::Integer(0));
+                properties.set_raw("Value", PropertyValue::Integer(0));
                 properties.set("Enabled", true);
                 properties.set("Visible", true);
             }
             ControlType::RadioButton => {
                 properties.set("Caption", name.clone());
-                properties.set("Value", 0);
+                properties.set("Checked", false);
+                use crate::properties::PropertyValue;
+                properties.set_raw("Value", PropertyValue::Integer(0));
                 properties.set("Enabled", true);
                 properties.set("Visible", true);
             }
@@ -337,6 +342,10 @@ impl Control {
                     properties.set_raw("ListIndex", PropertyValue::Integer(-1));
                     properties.set_raw("Text", PropertyValue::String(String::new()));
                     properties.set_raw("Value", PropertyValue::String(String::new()));
+                // ComboBox-specific: DropDownStyle default is DropDown (1) in .NET
+                if control_type == ControlType::ComboBox {
+                    properties.set_raw("DropDownStyle", PropertyValue::Integer(1));
+                }
             }
             ControlType::RichTextBox => {
                 properties.set("Text", "");

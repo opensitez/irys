@@ -108,6 +108,13 @@ fn event_type_from_name(name: &str) -> Option<EventType> {
         "celldoubleclick" => Some(EventType::CellDoubleClick),
         "cellvaluechanged" => Some(EventType::CellValueChanged),
         "selectionchanged" => Some(EventType::SelectionChanged),
+        "linkclicked" => Some(EventType::LinkClicked),
+        "datechanged" => Some(EventType::DateChanged),
+        "dateselected" => Some(EventType::DateSelected),
+        "itemclicked" => Some(EventType::ItemClicked),
+        "buttonclick" => Some(EventType::ButtonClick),
+        "splittermoved" => Some(EventType::SplitterMoved),
+        "maskinputrejected" => Some(EventType::MaskInputRejected),
         _ => None,
     }
 }
@@ -798,6 +805,8 @@ pub fn FormRunner() -> Element {
                     let caption = ctrl.get_caption().map(|s| s.to_string()).unwrap_or(ctrl_name.clone());
                     let text = ctrl.get_text().map(|s| s.to_string()).unwrap_or_default();
                     let val = ctrl.properties.get_int("Value").unwrap_or(0);
+                    let selected_index = ctrl.properties.get_int("SelectedIndex").unwrap_or(-1);
+                    let checked = ctrl.properties.get_bool("Checked").unwrap_or(false);
 
                     interp
                         .env
@@ -810,6 +819,19 @@ pub fn FormRunner() -> Element {
                     interp
                         .env
                         .set(&format!("{}.Value", ctrl_name), irys_runtime::Value::Integer(val))
+                        .ok();
+                    interp
+                        .env
+                        .set(&format!("{}.SelectedIndex", ctrl_name), irys_runtime::Value::Integer(selected_index))
+                        .ok();
+                    interp
+                        .env
+                        .set(&format!("{}.Checked", ctrl_name), irys_runtime::Value::Boolean(checked))
+                        .ok();
+                    let check_state = ctrl.properties.get_int("CheckState").unwrap_or(if checked { 1 } else { 0 });
+                    interp
+                        .env
+                        .set(&format!("{}.CheckState", ctrl_name), irys_runtime::Value::Integer(check_state))
                         .ok();
 
                     if is_vbnet {
@@ -1393,6 +1415,7 @@ pub fn FormRunner() -> Element {
                                                                         ctrl.set_text(evt.value());
                                                                     }
                                                                 }
+                                                                handle_event(name_clone.clone(), "TextChanged".to_string(), None);
                                                                 handle_event(name_clone.clone(), "Change".to_string(), None);
                                                             }
                                                         }
@@ -1418,8 +1441,21 @@ pub fn FormRunner() -> Element {
                                                             input {
                                                                 r#type: "checkbox",
                                                                 disabled: !is_enabled,
-                                                                checked: control.properties.get_int("Value").unwrap_or(0) == 1,
+                                                                checked: control.properties.get_bool("Checked").unwrap_or(false) || control.properties.get_int("Value").unwrap_or(0) == 1,
                                                                 onclick: move |evt: MouseEvent| {
+                                                                    // Toggle state
+                                                                    if let Some(frm) = runtime_form.write().as_mut() {
+                                                                        if let Some(ctrl) = frm.get_control_by_name_mut(&name_clone) {
+                                                                            let was_checked = ctrl.properties.get_bool("Checked").unwrap_or(false) || ctrl.properties.get_int("Value").unwrap_or(0) == 1;
+                                                                            let now_checked = !was_checked;
+                                                                            ctrl.properties.set("Checked", now_checked);
+                                                                            use irys_forms::properties::PropertyValue;
+                                                                            let int_val = if now_checked { 1 } else { 0 };
+                                                                            ctrl.properties.set_raw("Value", PropertyValue::Integer(int_val));
+                                                                            ctrl.properties.set_raw("CheckState", PropertyValue::Integer(int_val));
+                                                                        }
+                                                                    }
+                                                                    handle_event(name_clone.clone(), "CheckedChanged".to_string(), None);
                                                                     let data = irys_runtime::EventData::Mouse {
                                                                         button: 0x100000, clicks: 1,
                                                                         x: evt.client_coordinates().x as i32,
@@ -1439,8 +1475,17 @@ pub fn FormRunner() -> Element {
                                                                 r#type: "radio",
                                                                 name: "radio_group",
                                                                 disabled: !is_enabled,
-                                                                checked: control.properties.get_int("Value").unwrap_or(0) == 1,
+                                                                checked: control.properties.get_bool("Checked").unwrap_or(false) || control.properties.get_int("Value").unwrap_or(0) == 1,
                                                                 onclick: move |evt: MouseEvent| {
+                                                                    // Toggle state
+                                                                    if let Some(frm) = runtime_form.write().as_mut() {
+                                                                        if let Some(ctrl) = frm.get_control_by_name_mut(&name_clone) {
+                                                                            ctrl.properties.set("Checked", true);
+                                                                            use irys_forms::properties::PropertyValue;
+                                                                            ctrl.properties.set_raw("Value", PropertyValue::Integer(1));
+                                                                        }
+                                                                    }
+                                                                    handle_event(name_clone.clone(), "CheckedChanged".to_string(), None);
                                                                     let data = irys_runtime::EventData::Mouse {
                                                                         button: 0x100000, clicks: 1,
                                                                         x: evt.client_coordinates().x as i32,
@@ -1473,7 +1518,21 @@ pub fn FormRunner() -> Element {
                                                             style: "width: 100%; height: 100%; border: 1px solid #cbd5e1; border-radius: 8px; {base_field_bg} {style_back} {style_font} {style_fore};",
                                                             multiple: true,
                                                             disabled: !is_enabled,
-                                                            onchange: move |_| handle_event(name_clone.clone(), "Click".to_string(), None),
+                                                            onchange: move |evt| {
+                                                                if let Some(frm) = runtime_form.write().as_mut() {
+                                                                    if let Some(ctrl) = frm.get_control_by_name_mut(&name_clone) {
+                                                                        ctrl.set_text(evt.value());
+                                                                        // Try to get selected index from value
+                                                                        let items = ctrl.get_list_items();
+                                                                        if let Some(idx) = items.iter().position(|i| *i == evt.value()) {
+                                                                            use irys_forms::properties::PropertyValue;
+                                                                            ctrl.properties.set_raw("SelectedIndex", PropertyValue::Integer(idx as i32));
+                                                                        }
+                                                                    }
+                                                                }
+                                                                handle_event(name_clone.clone(), "SelectedIndexChanged".to_string(), None);
+                                                                handle_event(name_clone.clone(), "Click".to_string(), None);
+                                                            },
                                                             {
                                                                 let mut items = control.get_list_items();
                                                                 if items.is_empty() {
@@ -1503,8 +1562,15 @@ pub fn FormRunner() -> Element {
                                                                 if let Some(frm) = runtime_form.write().as_mut() {
                                                                     if let Some(ctrl) = frm.get_control_by_name_mut(&name_clone) {
                                                                         ctrl.set_text(evt.value());
+                                                                        let items = ctrl.get_list_items();
+                                                                        if let Some(idx) = items.iter().position(|i| *i == evt.value()) {
+                                                                            use irys_forms::properties::PropertyValue;
+                                                                            ctrl.properties.set_raw("SelectedIndex", PropertyValue::Integer(idx as i32));
+                                                                        }
                                                                     }
                                                                 }
+                                                                handle_event(name_clone.clone(), "SelectedIndexChanged".to_string(), None);
+                                                                handle_event(name_clone.clone(), "TextChanged".to_string(), None);
                                                                 handle_event(name_clone.clone(), "Change".to_string(), None);
                                                             },
                                                             {
@@ -1589,6 +1655,10 @@ pub fn FormRunner() -> Element {
                                                                         contenteditable: if is_enabled { "true" } else { "false" },
                                                                         style: "flex: 1; padding: 8px; overflow: auto; outline: none; background: white; {style_back} {style_font} {style_fore};",
                                                                         dangerous_inner_html: "{html}",
+                                                                        oninput: move |_| {
+                                                                            handle_event(name_clone.clone(), "TextChanged".to_string(), None);
+                                                                            handle_event(name_clone.clone(), "Change".to_string(), None);
+                                                                        },
                                                                         onmounted: move |_| {
                                                                             let _ = document::eval(&format!(r#"
                                                                                 (function() {{
@@ -1797,18 +1867,46 @@ pub fn FormRunner() -> Element {
                                                             },
                                                         }
                                                     },
-                                                    ControlType::TabControl => rsx! {
-                                                        div {
-                                                            style: "width: 100%; height: 100%; border: 1px solid #adb5bd; display: flex; flex-direction: column;",
+                                                    ControlType::TabControl => {
+                                                        let tab_items = control.get_list_items();
+                                                        let selected_tab = control.properties.get_int("SelectedIndex").unwrap_or(0);
+                                                        let tabs: Vec<String> = if tab_items.is_empty() { vec!["Tab 1".to_string()] } else { tab_items };
+                                                        rsx! {
                                                             div {
-                                                                style: "display: flex; background: #e9ecef; border-bottom: 1px solid #adb5bd;",
+                                                                style: "width: 100%; height: 100%; border: 1px solid #adb5bd; display: flex; flex-direction: column;",
                                                                 div {
-                                                                    style: "padding: 4px 12px; background: white; border: 1px solid #adb5bd; border-bottom: none; cursor: pointer; font-size: 12px;",
-                                                                    "Tab 1"
+                                                                    style: "display: flex; background: #e9ecef; border-bottom: 1px solid #adb5bd;",
+                                                                    for (ti, tab_label) in tabs.iter().enumerate() {
+                                                                        {
+                                                                            let tl = tab_label.clone();
+                                                                            let tab_name = name_clone.clone();
+                                                                            let is_active = ti as i32 == selected_tab;
+                                                                            let tab_style = if is_active {
+                                                                                "padding: 4px 12px; background: white; border: 1px solid #adb5bd; border-bottom: none; cursor: pointer; font-size: 12px; font-weight: bold;"
+                                                                            } else {
+                                                                                "padding: 4px 12px; background: #e9ecef; border: 1px solid transparent; cursor: pointer; font-size: 12px;"
+                                                                            };
+                                                                            rsx! {
+                                                                                div {
+                                                                                    style: "{tab_style}",
+                                                                                    onclick: move |_| {
+                                                                                        if let Some(frm) = runtime_form.write().as_mut() {
+                                                                                            if let Some(ctrl) = frm.get_control_by_name_mut(&tab_name) {
+                                                                                                use irys_forms::properties::PropertyValue;
+                                                                                                ctrl.properties.set_raw("SelectedIndex", PropertyValue::Integer(ti as i32));
+                                                                                            }
+                                                                                        }
+                                                                                        handle_event(tab_name.clone(), "SelectedIndexChanged".to_string(), None);
+                                                                                    },
+                                                                                    "{tl}"
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
                                                                 }
-                                                            }
-                                                            div {
-                                                                style: "flex: 1; padding: 8px; background: white;",
+                                                                div {
+                                                                    style: "flex: 1; padding: 8px; background: white;",
+                                                                }
                                                             }
                                                         }
                                                     },
@@ -1863,13 +1961,26 @@ pub fn FormRunner() -> Element {
                                                             div {
                                                                 style: "width: 100%; height: 100%; background: #f0f0f0; border-bottom: 1px solid #ccc; display: flex; align-items: center; padding: 0 4px; {style_font} font-size: 12px;",
                                                                 if menu_items.is_empty() {
-                                                                    span { style: "padding: 2px 8px;", "File" }
-                                                                    span { style: "padding: 2px 8px;", "Edit" }
-                                                                    span { style: "padding: 2px 8px;", "View" }
-                                                                    span { style: "padding: 2px 8px;", "Help" }
+                                                                    span {
+                                                                        style: "padding: 2px 8px; cursor: pointer;",
+                                                                        onclick: move |_| handle_event(name_clone.clone(), "Click".to_string(), None),
+                                                                        "File"
+                                                                    }
                                                                 } else {
                                                                     for item in menu_items {
-                                                                        span { style: "padding: 2px 8px; cursor: pointer;", "{item}" }
+                                                                        {
+                                                                            let item_text = item.clone();
+                                                                            let menu_name = name_clone.clone();
+                                                                            rsx! {
+                                                                                span {
+                                                                                    style: "padding: 2px 8px; cursor: pointer;",
+                                                                                    onclick: move |_| {
+                                                                                        handle_event(menu_name.clone(), "ItemClicked".to_string(), None);
+                                                                                    },
+                                                                                    "{item_text}"
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -1934,10 +2045,26 @@ pub fn FormRunner() -> Element {
                                                             div {
                                                                 style: "width: 100%; height: 100%; background: #f0f0f0; border-bottom: 1px solid #ccc; display: flex; align-items: center; gap: 1px; padding: 2px 4px; {style_font} font-size: 11px;",
                                                                 if ts_items.is_empty() {
-                                                                    span { style: "padding: 2px 6px; background: #e8e8e8; border: 1px solid #ccc; cursor: pointer;", "Button1" }
+                                                                    span {
+                                                                        style: "padding: 2px 6px; background: #e8e8e8; border: 1px solid #ccc; cursor: pointer;",
+                                                                        onclick: move |_| handle_event(name_clone.clone(), "ButtonClick".to_string(), None),
+                                                                        "Button1"
+                                                                    }
                                                                 } else {
                                                                     for it in ts_items {
-                                                                        span { style: "padding: 2px 6px; background: #e8e8e8; border: 1px solid #ccc; cursor: pointer;", "{it}" }
+                                                                        {
+                                                                            let it_text = it.clone();
+                                                                            let ts_name = name_clone.clone();
+                                                                            rsx! {
+                                                                                span {
+                                                                                    style: "padding: 2px 6px; background: #e8e8e8; border: 1px solid #ccc; cursor: pointer;",
+                                                                                    onclick: move |_| {
+                                                                                        handle_event(ts_name.clone(), "ItemClicked".to_string(), None);
+                                                                                    },
+                                                                                    "{it_text}"
+                                                                                }
+                                                                            }
+                                                                        }
                                                                     }
                                                                 }
                                                             }

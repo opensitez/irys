@@ -119,6 +119,7 @@ pub enum EventType {
     // TabControl
     SelectedIndexChanged2,
     Selected,
+    Deselected,
     Deselecting,
     Selecting,
     // Toolbar / StatusStrip
@@ -247,6 +248,7 @@ impl EventType {
             EventType::ColumnWidthChanged => "ColumnWidthChanged",
             EventType::SelectedIndexChanged2 => "SelectedIndexChanged",
             EventType::Selected => "Selected",
+            EventType::Deselected => "Deselected",
             EventType::Deselecting => "Deselecting",
             EventType::Selecting => "Selecting",
             EventType::ButtonClick => "ButtonClick",
@@ -273,7 +275,7 @@ impl EventType {
                 "sender As Object, e As KeyEventArgs",
             EventType::KeyPress =>
                 "sender As Object, e As KeyPressEventArgs",
-            // Form closing
+            // Form closing/closed
             EventType::FormClosing =>
                 "sender As Object, e As FormClosingEventArgs",
             EventType::FormClosed =>
@@ -281,6 +283,95 @@ impl EventType {
             // Paint
             EventType::Paint =>
                 "sender As Object, e As PaintEventArgs",
+            // DataGridView cell painting
+            EventType::CellPainting =>
+                "sender As Object, e As DataGridViewCellPaintingEventArgs",
+            // TreeView events — After* use TreeViewEventArgs
+            EventType::AfterSelect | EventType::AfterCheck |
+            EventType::AfterExpand | EventType::AfterCollapse =>
+                "sender As Object, e As TreeViewEventArgs",
+            // TreeView events — Before* use TreeViewCancelEventArgs
+            EventType::BeforeSelect | EventType::BeforeCheck |
+            EventType::BeforeExpand | EventType::BeforeCollapse =>
+                "sender As Object, e As TreeViewCancelEventArgs",
+            EventType::AfterLabelEdit | EventType::BeforeLabelEdit =>
+                "sender As Object, e As NodeLabelEditEventArgs",
+            EventType::NodeMouseClick | EventType::NodeMouseDoubleClick =>
+                "sender As Object, e As TreeNodeMouseClickEventArgs",
+            EventType::ItemDrag =>
+                "sender As Object, e As ItemDragEventArgs",
+            // DataGridView events — standard cell args
+            EventType::CellClick | EventType::CellDoubleClick |
+            EventType::CellValueChanged | EventType::CellContentClick |
+            EventType::CellEndEdit | EventType::CellEnter |
+            EventType::CellLeave =>
+                "sender As Object, e As DataGridViewCellEventArgs",
+            EventType::CellBeginEdit =>
+                "sender As Object, e As DataGridViewCellCancelEventArgs",
+            EventType::CellValidating =>
+                "sender As Object, e As DataGridViewCellValidatingEventArgs",
+            EventType::CellFormatting =>
+                "sender As Object, e As DataGridViewCellFormattingEventArgs",
+            EventType::DataError =>
+                "sender As Object, e As DataGridViewDataErrorEventArgs",
+            EventType::RowEnter | EventType::RowLeave | EventType::RowValidated =>
+                "sender As Object, e As DataGridViewCellEventArgs",
+            EventType::RowValidating =>
+                "sender As Object, e As DataGridViewCellCancelEventArgs",
+            EventType::DataBindingComplete =>
+                "sender As Object, e As DataGridViewBindingCompleteEventArgs",
+            EventType::ColumnHeaderMouseClick | EventType::RowHeaderMouseClick =>
+                "sender As Object, e As DataGridViewCellMouseEventArgs",
+            // LinkLabel
+            EventType::LinkClicked =>
+                "sender As Object, e As LinkLabelLinkClickedEventArgs",
+            // SplitContainer
+            EventType::SplitterMoved =>
+                "sender As Object, e As SplitterEventArgs",
+            EventType::SplitterMoving =>
+                "sender As Object, e As SplitterCancelEventArgs",
+            // Drag events
+            EventType::DragDrop | EventType::DragEnter | EventType::DragOver =>
+                "sender As Object, e As DragEventArgs",
+            // Scroll
+            EventType::Scroll =>
+                "sender As Object, e As ScrollEventArgs",
+            // ListView
+            EventType::ColumnClick =>
+                "sender As Object, e As ColumnClickEventArgs",
+            EventType::ItemSelectionChanged =>
+                "sender As Object, e As ListViewItemSelectionChangedEventArgs",
+            // DrawItem/MeasureItem
+            EventType::DrawItem =>
+                "sender As Object, e As DrawItemEventArgs",
+            EventType::MeasureItem =>
+                "sender As Object, e As MeasureItemEventArgs",
+            // WebBrowser
+            EventType::Navigating =>
+                "sender As Object, e As WebBrowserNavigatingEventArgs",
+            EventType::Navigated =>
+                "sender As Object, e As WebBrowserNavigatedEventArgs",
+            EventType::DocumentCompleted =>
+                "sender As Object, e As WebBrowserDocumentCompletedEventArgs",
+            EventType::ProgressChanged =>
+                "sender As Object, e As WebBrowserProgressChangedEventArgs",
+            // CheckedListBox / ListView
+            EventType::ItemCheck =>
+                "sender As Object, e As ItemCheckEventArgs",
+            // MaskedTextBox
+            EventType::MaskInputRejected =>
+                "sender As Object, e As MaskInputRejectedEventArgs",
+            // Drag feedback
+            EventType::GiveFeedback =>
+                "sender As Object, e As GiveFeedbackEventArgs",
+            // TabControl
+            EventType::Selecting | EventType::Deselecting =>
+                "sender As Object, e As TabControlCancelEventArgs",
+            EventType::Selected | EventType::Deselected =>
+                "sender As Object, e As TabControlEventArgs",
+            // DropDown cancel
+            EventType::DropDownOpening =>
+                "sender As Object, e As CancelEventArgs",
             // All other events use base EventArgs
             _ => "sender As Object, e As EventArgs",
         }
@@ -399,6 +490,7 @@ impl EventType {
             "itemactivate" => Some(EventType::ItemActivate),
             "columnwidthchanged" => Some(EventType::ColumnWidthChanged),
             "selected" => Some(EventType::Selected),
+            "deselected" => Some(EventType::Deselected),
             "deselecting" => Some(EventType::Deselecting),
             "selecting" => Some(EventType::Selecting),
             "buttonclick" => Some(EventType::ButtonClick),
@@ -528,7 +620,7 @@ impl EventType {
             | EventType::ProgressChanged => matches!(control_type, Some(ControlType::WebBrowser)),
 
             // TabControl tab events
-            EventType::SelectedIndexChanged2 | EventType::Selected
+            EventType::SelectedIndexChanged2 | EventType::Selected | EventType::Deselected
             | EventType::Deselecting | EventType::Selecting => matches!(
                 control_type,
                 Some(ControlType::TabControl)
@@ -689,6 +781,7 @@ impl EventType {
             EventType::ColumnWidthChanged,
             EventType::SelectedIndexChanged2,
             EventType::Selected,
+            EventType::Deselected,
             EventType::Deselecting,
             EventType::Selecting,
             EventType::ButtonClick,
