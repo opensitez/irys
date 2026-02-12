@@ -46,6 +46,15 @@ fn strip_html_tags(html: &str) -> String {
         .replace("&#39;", "'")
 }
 
+/// Identifies which resource file is being edited
+#[derive(Clone, PartialEq, Debug)]
+pub enum ResourceTarget {
+    /// Project-level resource file by index in project.resource_files
+    Project(usize),
+    /// Form-level resource file, identified by form name
+    Form(String),
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct AppState {
     pub project: Signal<Option<Project>>,
@@ -60,6 +69,7 @@ pub struct AppState {
     pub show_project_explorer: Signal<bool>,
     pub show_project_properties: Signal<bool>,
     pub show_resources: Signal<bool>,
+    pub current_resource_target: Signal<Option<ResourceTarget>>,
     pub clipboard_controls: Signal<Vec<irys_forms::Control>>,
     /// Per-form undo stacks keyed by form name.
     pub undo_stacks: Signal<HashMap<String, Vec<FormSnapshot>>>,
@@ -82,6 +92,7 @@ impl AppState {
             show_project_explorer: Signal::new(true),
             show_project_properties: Signal::new(false),
             show_resources: Signal::new(false),
+            current_resource_target: Signal::new(None),
             clipboard_controls: Signal::new(Vec::new()),
             undo_stacks: Signal::new(HashMap::new()),
             redo_stacks: Signal::new(HashMap::new()),
@@ -278,7 +289,15 @@ impl AppState {
         let mut project = Project::new("Project1");
         let mut form = Form::new("Form1");
         form.caption = "Form1".to_string();
-        project.add_form(form);
+        form.width = 640;
+        form.height = 480;
+        
+        let designer_code = irys_forms::serialization::designer_codegen::generate_designer_code(&form);
+        let user_code = irys_forms::serialization::designer_codegen::generate_user_code_stub("Form1");
+        let form_module = irys_project::FormModule::new_vbnet(form, designer_code, user_code);
+        project.forms.push(form_module);
+        project.startup_object = irys_project::StartupObject::Form("Form1".to_string());
+        project.startup_form = Some("Form1".to_string());
 
         *project_write = Some(project);
         *current_form_write = Some("Form1".to_string());
@@ -344,7 +363,7 @@ impl AppState {
         let Some(project) = project_read.as_ref() else { return };
 
         if let Some(path) = FileDialog::new()
-            .set_file_name(&format!("{}.vbp", project.name))
+            .set_file_name(&format!("{}.vbproj", project.name))
             .add_filter("Irys Project", &["vbp", "vbproj"])
             .save_file()
         {
@@ -616,6 +635,35 @@ impl AppState {
     pub fn add_new_form(&self) {
         let mut project_signal = self.project;
         let mut project_write = project_signal.write();
+
+        if let Some(proj) = project_write.as_mut() {
+            let mut counter = 1;
+            let mut name = format!("Form{}", counter);
+            while proj.get_form(&name).is_some() {
+                counter += 1;
+                name = format!("Form{}", counter);
+            }
+
+            let mut form = Form::new(&name);
+            form.caption = name.clone();
+            form.width = 640;
+            form.height = 480;
+
+            let designer_code = irys_forms::serialization::designer_codegen::generate_designer_code(&form);
+            let user_code = irys_forms::serialization::designer_codegen::generate_user_code_stub(&name);
+
+            let form_module = irys_project::FormModule::new_vbnet(form, designer_code, user_code);
+            proj.forms.push(form_module);
+
+            // Switch to new form
+            let mut form_signal = self.current_form;
+            *form_signal.write() = Some(name);
+        }
+    }
+
+    pub fn add_new_classic_form(&self) {
+        let mut project_signal = self.project;
+        let mut project_write = project_signal.write();
         
         if let Some(proj) = project_write.as_mut() {
             let mut counter = 1;
@@ -630,7 +678,7 @@ impl AppState {
             form.width = 400;
             form.height = 300;
             
-            proj.add_form(form);
+            proj.forms.push(irys_project::FormModule::new_classic(form));
             
             // Switch to new form
             let mut form_signal = self.current_form;
@@ -662,35 +710,6 @@ impl AppState {
                 }
                 form_module.sync_designer_code();
             }
-        }
-    }
-
-    pub fn add_new_vbnet_form(&self) {
-        let mut project_signal = self.project;
-        let mut project_write = project_signal.write();
-
-        if let Some(proj) = project_write.as_mut() {
-            let mut counter = 1;
-            let mut name = format!("Form{}", counter);
-            while proj.get_form(&name).is_some() {
-                counter += 1;
-                name = format!("Form{}", counter);
-            }
-
-            let mut form = Form::new(&name);
-            form.caption = name.clone();
-            form.width = 640;
-            form.height = 480;
-
-            let designer_code = irys_forms::serialization::designer_codegen::generate_designer_code(&form);
-            let user_code = irys_forms::serialization::designer_codegen::generate_user_code_stub(&name);
-
-            let form_module = irys_project::FormModule::new_vbnet(form, designer_code, user_code);
-            proj.forms.push(form_module);
-
-            // Switch to new form
-            let mut form_signal = self.current_form;
-            *form_signal.write() = Some(name);
         }
     }
 

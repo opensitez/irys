@@ -1,13 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 
 use dioxus::prelude::*;
 use dioxus::desktop::{Config, WindowBuilder};
 
 use irys_parser::parse_program;
 use irys_project::Project;
-use irys_runtime::{Interpreter, RuntimeSideEffect};
+use irys_runtime::{Interpreter, ResourceEntry, RuntimeSideEffect};
 
 use crate::runtime_panel::RuntimeProject;
 use crate::FormRunner;
@@ -137,11 +136,8 @@ fn run_console_project(project: &Project, extra_args: &[String]) {
     let mut interp = Interpreter::new();
     interp.set_command_line_args(extra_args.to_vec());
 
-    let mut res_map = HashMap::new();
-    for item in &project.resources.resources {
-        res_map.insert(item.name.clone(), item.value.clone());
-    }
-    interp.register_resources(res_map);
+    let entries = collect_resource_entries(project);
+    interp.register_resource_entries(entries);
 
     for code_file in &project.code_files {
         match parse_program(&code_file.code) {
@@ -223,4 +219,54 @@ fn drain_console_effects(interp: &mut Interpreter) {
             RuntimeSideEffect::BindingPositionChanged { .. } => {}
         }
     }
+}
+
+/// Collect all resource entries from the project (resource_files + form-level resources)
+/// into a flat Vec of ResourceEntry for the runtime.
+pub fn collect_resource_entries(project: &Project) -> Vec<ResourceEntry> {
+    let mut entries = Vec::new();
+
+    // Project-level resource files
+    for mgr in &project.resource_files {
+        for item in &mgr.resources {
+            let rt = format!("{:?}", item.resource_type).to_lowercase();
+            entries.push(ResourceEntry {
+                name: item.name.clone(),
+                value: item.value.clone(),
+                resource_type: rt,
+                file_path: item.file_name.clone(),
+            });
+        }
+    }
+
+    // Legacy: also include old single resources field (backward compat)
+    for item in &project.resources.resources {
+        let rt = format!("{:?}", item.resource_type).to_lowercase();
+        // Avoid duplicates (if already in resource_files)
+        if !entries.iter().any(|e| e.name == item.name) {
+            entries.push(ResourceEntry {
+                name: item.name.clone(),
+                value: item.value.clone(),
+                resource_type: rt,
+                file_path: item.file_name.clone(),
+            });
+        }
+    }
+
+    // Form-level resources
+    for form_mod in &project.forms {
+        for item in &form_mod.resources.resources {
+            let rt = format!("{:?}", item.resource_type).to_lowercase();
+            // Prefix form resources with form name to avoid collisions
+            let key = format!("{}_{}", form_mod.form.name, item.name);
+            entries.push(ResourceEntry {
+                name: key,
+                value: item.value.clone(),
+                resource_type: rt,
+                file_path: item.file_name.clone(),
+            });
+        }
+    }
+
+    entries
 }

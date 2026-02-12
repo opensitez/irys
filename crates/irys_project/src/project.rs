@@ -43,7 +43,10 @@ pub enum FormFormat {
 
 impl Default for FormFormat {
     fn default() -> Self {
-        FormFormat::Classic
+        FormFormat::VbNet {
+            designer_code: String::new(),
+            user_code: String::new(),
+        }
     }
 }
 
@@ -53,18 +56,16 @@ pub struct FormModule {
     pub code: String,
     #[serde(default)]
     pub format: FormFormat,
+    /// Form-specific resources (Form1.resx) — localizable strings, embedded icons, etc.
+    #[serde(default)]
+    pub resources: ResourceManager,
 }
 
 impl FormModule {
     pub fn new(form: Form) -> Self {
-        Self {
-            form,
-            code: String::new(),
-            format: FormFormat::Classic,
-        }
-    }
-
-    pub fn new_vbnet(form: Form, designer_code: String, user_code: String) -> Self {
+        let name = form.name.clone();
+        let designer_code = irys_forms::serialization::designer_codegen::generate_designer_code(&form);
+        let user_code = irys_forms::serialization::designer_codegen::generate_user_code_stub(&name);
         Self {
             form,
             code: String::new(),
@@ -72,6 +73,31 @@ impl FormModule {
                 designer_code,
                 user_code,
             },
+            resources: ResourceManager::new_named(format!("{name}")),
+        }
+    }
+
+    /// Create a classic (VB6-style) form module
+    pub fn new_classic(form: Form) -> Self {
+        let name = form.name.clone();
+        Self {
+            form,
+            code: String::new(),
+            format: FormFormat::Classic,
+            resources: ResourceManager::new_named(format!("{name}")),
+        }
+    }
+
+    pub fn new_vbnet(form: Form, designer_code: String, user_code: String) -> Self {
+        let name = form.name.clone();
+        Self {
+            form,
+            code: String::new(),
+            format: FormFormat::VbNet {
+                designer_code,
+                user_code,
+            },
+            resources: ResourceManager::new_named(format!("{name}")),
         }
     }
 
@@ -122,7 +148,11 @@ pub struct Project {
     pub startup_form: Option<String>,
     pub forms: Vec<FormModule>,
     pub code_files: Vec<CodeFile>,
+    /// Multiple resource files (.resx) — e.g. Resources.resx, Strings.resx, Images.resx
     #[serde(default)]
+    pub resource_files: Vec<ResourceManager>,
+    /// Deprecated: single resource manager. Kept for backward compat deserialization.
+    #[serde(skip_serializing)]
     pub resources: ResourceManager,
 }
 
@@ -140,6 +170,7 @@ impl Project {
             startup_form: None,
             forms: Vec::new(),
             code_files: Vec::new(),
+            resource_files: Vec::new(),
             resources: ResourceManager::new(),
         }
     }
@@ -217,6 +248,8 @@ impl<'de> Deserialize<'de> for Project {
             #[serde(default)]
             classes: Vec<CodeFile>,
             #[serde(default)]
+            resource_files: Vec<ResourceManager>,
+            #[serde(default)]
             resources: ResourceManager,
         }
 
@@ -239,12 +272,22 @@ impl<'de> Deserialize<'de> for Project {
             StartupObject::None
         };
 
+        // Migrate old single resources to resource_files if needed
+        let resource_files = if !helper.resource_files.is_empty() {
+            helper.resource_files
+        } else if !helper.resources.resources.is_empty() {
+            vec![helper.resources.clone()]
+        } else {
+            Vec::new()
+        };
+
         Ok(Project {
             name: helper.name,
             startup_object,
             startup_form: helper.startup_form,
             forms: helper.forms,
             code_files,
+            resource_files,
             resources: helper.resources,
         })
     }

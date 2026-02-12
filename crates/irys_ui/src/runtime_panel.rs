@@ -291,14 +291,11 @@ pub fn FormRunner() -> Element {
 
                     let mut interp = Interpreter::new();
 
-                    // Register resources
-                    let mut res_map = HashMap::new();
+                    // Register resources from all project resource files + form resources
                     if let Some(proj) = rp.project.read().as_ref() {
-                        for item in &proj.resources.resources {
-                            res_map.insert(item.name.clone(), item.value.clone());
-                        }
+                        let entries = crate::runner::collect_resource_entries(proj);
+                        interp.register_resource_entries(entries);
                     }
-                    interp.register_resources(res_map);
 
                     // Load all code files (global scope — VB.NET modules are flattened)
                     let project_read2 = rp.project.read();
@@ -352,14 +349,11 @@ pub fn FormRunner() -> Element {
 
                     let mut interp = Interpreter::new();
 
-                    // Register resources
-                    let mut res_map = HashMap::new();
+                    // Register resources from all project resource files + form resources
                     if let Some(proj) = rp.project.read().as_ref() {
-                        for item in &proj.resources.resources {
-                            res_map.insert(item.name.clone(), item.value.clone());
-                        }
+                        let entries = crate::runner::collect_resource_entries(proj);
+                        interp.register_resource_entries(entries);
                     }
-                    interp.register_resources(res_map);
 
                     // Load all code files (global scope + class definitions)
                     let project_read = rp.project.read();

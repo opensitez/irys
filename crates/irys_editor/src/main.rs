@@ -65,11 +65,19 @@ fn App() -> Element {
             }
         }
         
-        // Create default project (fallback)
+        // Create default project (fallback) with VB.NET form
         let mut project = Project::new("Project1");
         let mut form = Form::new("Form1");
         form.caption = "Form1".to_string();
-        project.add_form(form);
+        form.width = 640;
+        form.height = 480;
+        
+        let designer_code = irys_forms::serialization::designer_codegen::generate_designer_code(&form);
+        let user_code = irys_forms::serialization::designer_codegen::generate_user_code_stub("Form1");
+        let form_module = irys_project::FormModule::new_vbnet(form, designer_code, user_code);
+        project.forms.push(form_module);
+        project.startup_object = irys_project::StartupObject::Form("Form1".to_string());
+        project.startup_form = Some("Form1".to_string());
         
         state.project.set(Some(project));
         state.current_form.set(Some("Form1".to_string()));
@@ -82,6 +90,10 @@ fn App() -> Element {
     let show_toolbox = *state.show_toolbox.read();
     let show_properties = *state.show_properties.read();
     let show_project_explorer = *state.show_project_explorer.read();
+    let show_resources = *state.show_resources.read();
+    let show_code = *state.show_code_editor.read();
+    // Only show toolbox/properties when in form designer view (not code, not resources, and viewing a form)
+    let in_form_designer = !run_mode && !show_resources && !show_code && state.get_current_form().is_some();
     
     rsx! {
         div {
@@ -105,8 +117,8 @@ fn App() -> Element {
                     ProjectExplorer {}
                 }
                 
-                // Left Sidebar - Toolbox (only in design mode)
-                if !run_mode && show_toolbox {
+                // Left Sidebar - Toolbox (only in form designer mode)
+                if in_form_designer && show_toolbox {
                     Toolbox {}
                 }
                 
@@ -116,16 +128,60 @@ fn App() -> Element {
                     
                     if run_mode {
                         RuntimePanel {}
-                    } else if *state.show_resources.read() {
-                        if let Some(proj) = state.project.read().clone() {
-                            ResourceEditor {
-                                resources: proj.resources.clone(),
-                                on_change: move |new_mgr| {
-                                    let mut p_lock = state.project.write();
-                                    if let Some(p) = p_lock.as_mut() {
-                                        p.resources = new_mgr;
+                    } else if show_resources {
+                        {
+                            let target = state.current_resource_target.read().clone();
+                            let proj_read = state.project.read();
+                            if let Some(proj) = proj_read.as_ref() {
+                                match &target {
+                                    Some(crate::app_state::ResourceTarget::Project(idx)) => {
+                                        if let Some(res) = proj.resource_files.get(*idx) {
+                                            let res_clone = res.clone();
+                                            let idx_copy = *idx;
+                                            rsx! {
+                                                ResourceEditor {
+                                                    resources: res_clone,
+                                                    on_change: move |new_mgr: irys_project::ResourceManager| {
+                                                        let mut p_lock = state.project.write();
+                                                        if let Some(p) = p_lock.as_mut() {
+                                                            if let Some(r) = p.resource_files.get_mut(idx_copy) {
+                                                                *r = new_mgr;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            rsx! { div { "Resource file not found" } }
+                                        }
+                                    }
+                                    Some(crate::app_state::ResourceTarget::Form(form_name)) => {
+                                        if let Some(fm) = proj.forms.iter().find(|f| &f.form.name == form_name) {
+                                            let res_clone = fm.resources.clone();
+                                            let fname = form_name.clone();
+                                            rsx! {
+                                                ResourceEditor {
+                                                    resources: res_clone,
+                                                    on_change: move |new_mgr: irys_project::ResourceManager| {
+                                                        let mut p_lock = state.project.write();
+                                                        if let Some(p) = p_lock.as_mut() {
+                                                            if let Some(fm) = p.forms.iter_mut().find(|f| f.form.name == fname) {
+                                                                fm.resources = new_mgr;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            rsx! { div { "Form not found" } }
+                                        }
+                                    }
+                                    None => {
+                                        rsx! { div { style: "padding: 20px; color: #999;", "Select a resource file from the Project Explorer" } }
                                     }
                                 }
+                            } else {
+                                rsx! {}
                             }
                         }
                     } else if *state.show_code_editor.read() {
@@ -135,8 +191,8 @@ fn App() -> Element {
                     }
                 }
                 
-                // Right Sidebar - Properties Panel (only in design mode)
-                if !run_mode && show_properties {
+                // Right Sidebar - Properties Panel (only in form designer mode)
+                if in_form_designer && show_properties {
                     PropertiesPanel {}
                 }
             }

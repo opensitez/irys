@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::app_state::AppState;
+use crate::app_state::{AppState, ResourceTarget};
 
 #[component]
 pub fn MenuBar() -> Element {
@@ -194,16 +194,25 @@ pub fn MenuBar() -> Element {
                         div {
                             style: "{dropdown_item_style}",
                             onclick: move |_| {
-                                state.add_new_vbnet_form();
+                                state.add_new_classic_form();
                                 close_menu();
                             },
-                            "Add VB.NET Form"
+                            "Add Classic (VB6) Form"
                         }
                         div { 
                             style: "{dropdown_item_style}", 
                             onclick: move |_| { 
+                                {
+                                    let mut proj_w = state.project.write();
+                                    if let Some(p) = proj_w.as_mut() {
+                                        if p.resource_files.is_empty() {
+                                            p.resource_files.push(irys_project::ResourceManager::new());
+                                        }
+                                    }
+                                }
                                 state.show_resources.set(true);
                                 state.show_code_editor.set(false);
+                                state.current_resource_target.set(Some(ResourceTarget::Project(0)));
                                 close_menu(); 
                             },
                             "Resources..." 

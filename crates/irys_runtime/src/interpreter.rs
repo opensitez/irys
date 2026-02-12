@@ -21,6 +21,7 @@ pub struct Interpreter {
     with_object: Option<Value>,
     pub file_handles: HashMap<i32, crate::file_io::FileHandle>,
     pub resources: HashMap<String, String>,
+    pub resource_entries: Vec<crate::ResourceEntry>,
     pub command_line_args: Vec<String>,
 }
 
@@ -38,6 +39,7 @@ impl Interpreter {
             with_object: None,
             file_handles: HashMap::new(),
             resources: HashMap::new(),
+            resource_entries: Vec::new(),
             command_line_args: Vec::new(),
         };
         interp.register_builtin_constants();
@@ -114,14 +116,66 @@ impl Interpreter {
         self.env.define("dbnull", dbnull_obj);
     }
 
+    /// Legacy: register resources as simple string map (backward compat)
     pub fn register_resources(&mut self, resources: HashMap<String, String>) {
         self.resources = resources.clone();
+        let entries: Vec<crate::ResourceEntry> = resources.into_iter()
+            .map(|(k, v)| crate::ResourceEntry::string(k, v))
+            .collect();
+        self.register_resource_entries(entries);
+    }
 
-        // Create Resources object
-        let mut res_fields = HashMap::new();
-        for (key, val) in resources {
-            res_fields.insert(key, Value::String(val));
+    /// Register typed resource entries – creates the My.Resources namespace with proper
+    /// typed values and a ResourceManager sub-object with GetString()/GetObject() methods.
+    pub fn register_resource_entries(&mut self, entries: Vec<crate::ResourceEntry>) {
+        // Keep a flat string map for backward compat
+        for e in &entries {
+            self.resources.insert(e.name.clone(), e.value.clone());
         }
+        self.resource_entries = entries.clone();
+
+        // Build Resource fields: each resource is a field on My.Resources
+        let mut res_fields = HashMap::new();
+        for entry in &entries {
+            let key = entry.name.to_lowercase();
+            let val = match entry.resource_type.as_str() {
+                "image" | "icon" | "audio" | "file" => {
+                    // File-based resource: create an object with path/type metadata
+                    let mut fields = HashMap::new();
+                    fields.insert("__type".to_string(), Value::String(format!("Resource.{}", entry.resource_type)));
+                    fields.insert("name".to_string(), Value::String(entry.name.clone()));
+                    fields.insert("filepath".to_string(), Value::String(entry.file_path.clone().unwrap_or_default()));
+                    fields.insert("resourcetype".to_string(), Value::String(entry.resource_type.clone()));
+                    // ToString returns the file path
+                    fields.insert("__tostring".to_string(), Value::String(entry.file_path.clone().unwrap_or(entry.value.clone())));
+                    Value::Object(Rc::new(RefCell::new(ObjectData {
+                        class_name: format!("Resource.{}", entry.resource_type),
+                        fields,
+                    })))
+                }
+                _ => Value::String(entry.value.clone()),
+            };
+            // Store both lowercase and original-case access
+            res_fields.insert(key, val.clone());
+            res_fields.insert(entry.name.clone(), val);
+        }
+
+        // Build the ResourceManager sub-object
+        // It holds all entries and supports GetString(key) / GetObject(key)
+        let mut rm_fields = HashMap::new();
+        rm_fields.insert("__type".to_string(), Value::String("ResourceManager".to_string()));
+        // Store all entries as a lookup map within the ResourceManager object
+        for entry in &entries {
+            rm_fields.insert(
+                format!("__res_{}", entry.name.to_lowercase()),
+                Value::String(entry.value.clone()),
+            );
+        }
+        let rm_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "ResourceManager".to_string(),
+            fields: rm_fields,
+        })));
+        res_fields.insert("resourcemanager".to_string(), rm_obj);
 
         let res_obj_data = ObjectData {
             class_name: "My.Resources".to_string(),
@@ -3105,6 +3159,36 @@ impl Interpreter {
                     }));
                 }
                 _ => {}
+            }
+
+            // Handle ResourceManager methods: GetString(key), GetObject(key)
+            if let Value::Object(obj_ref) = &obj_val {
+                let cn = obj_ref.borrow().class_name.clone();
+                if cn == "ResourceManager" {
+                    let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                        .map(|arg| self.evaluate_expr(arg))
+                        .collect();
+                    let arg_values = arg_values?;
+                    match method_name.as_str() {
+                        "getstring" => {
+                            let key = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                            let lookup = format!("__res_{}", key.to_lowercase());
+                            let val = obj_ref.borrow().fields.get(&lookup).cloned()
+                                .unwrap_or(Value::Nothing);
+                            return Ok(val);
+                        }
+                        "getobject" => {
+                            // GetObject returns the value from the parent My.Resources (could be file object)
+                            let key = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                            // Look up in our own fields first
+                            let lookup = format!("__res_{}", key.to_lowercase());
+                            let val = obj_ref.borrow().fields.get(&lookup).cloned()
+                                .unwrap_or(Value::Nothing);
+                            return Ok(val);
+                        }
+                        _ => {}
+                    }
+                }
             }
 
             // Handle StringBuilder methods

@@ -69,7 +69,7 @@ fn insert_before_end_class(code: &str, snippet: &str) -> String {
 
 #[component]
 pub fn PropertiesPanel() -> Element {
-    let mut state = use_context::<AppState>();
+    let state = use_context::<AppState>();
     let selected_control_id = state.selected_controls.read().first().copied();
     let form_opt = state.get_current_form();
     

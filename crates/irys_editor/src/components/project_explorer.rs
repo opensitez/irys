@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use crate::app_state::AppState;
+use crate::app_state::{AppState, ResourceTarget};
 
 #[component]
 pub fn ProjectExplorer() -> Element {
@@ -14,26 +14,12 @@ pub fn ProjectExplorer() -> Element {
             
             h3 { style: "margin: 0 0 8px 0; font-size: 14px;", "Project Explorer" }
             
-            // Toolbar
-            div {
-                style: "display: flex; gap: 4px; margin-bottom: 8px; border-bottom: 1px solid #ccc; padding-bottom: 4px;",
-                button {
-                    style: "padding: 2px 6px; font-size: 11px; cursor: pointer;",
-                    onclick: move |_| state.show_code_editor.set(false),
-                    "View Object"
-                }
-                button {
-                    style: "padding: 2px 6px; font-size: 11px; cursor: pointer;",
-                    onclick: move |_| state.show_code_editor.set(true),
-                    "View Code"
-                }
-            }
-            
             div {
                 style: "border-top: 1px solid #ccc; padding-top: 8px;",
                 
                 {
                     if let Some(proj) = project.as_ref() {
+                        let current_target = state.current_resource_target.read().clone();
                         rsx! {
                             div {
                                 style: "font-weight: bold; margin-bottom: 8px;",
@@ -43,6 +29,7 @@ pub fn ProjectExplorer() -> Element {
                             div {
                                 style: "margin-left: 16px;",
                                 
+                                // Forms section
                                 div {
                                     style: "font-weight: bold; margin-bottom: 4px;",
                                     "📋 Forms"
@@ -51,8 +38,14 @@ pub fn ProjectExplorer() -> Element {
                                 for form_module in &proj.forms {
                                     {
                                         let form_name = form_module.form.name.clone();
-                                        let is_selected = *current_form.read() == Some(form_name.clone());
-                                        let bg_color = if is_selected { "#e3f2fd" } else { "transparent" };
+                                        let form_name_res = form_module.form.name.clone();
+                                        let is_showing_res = *state.show_resources.read();
+                                        let is_form_selected = *current_form.read() == Some(form_name.clone()) && !is_showing_res;
+                                        let bg_color = if is_form_selected { "#e3f2fd" } else { "transparent" };
+                                        let has_form_res = !form_module.resources.resources.is_empty();
+                                        let form_res_count = form_module.resources.resources.len();
+                                        let is_form_res_selected = is_showing_res && current_target == Some(ResourceTarget::Form(form_name_res.clone()));
+                                        let form_res_bg = if is_form_res_selected { "#e3f2fd" } else { "transparent" };
                                         
                                         rsx! {
                                             div {
@@ -60,9 +53,22 @@ pub fn ProjectExplorer() -> Element {
                                                 style: "padding: 4px 8px; cursor: pointer; background: {bg_color}; border-radius: 3px; margin-bottom: 2px;",
                                                 onclick: move |_| {
                                                     current_form.set(Some(form_name.clone()));
-                                                    state.show_code_editor.set(false); // Switch to designer view
+                                                    state.show_code_editor.set(false);
+                                                    state.show_resources.set(false);
                                                 },
                                                 "  {form_name}"
+                                            }
+                                            // Form-level resources (shown indented under form if they exist)
+                                            if has_form_res {
+                                                div {
+                                                    style: "padding: 2px 8px 2px 24px; cursor: pointer; background: {form_res_bg}; border-radius: 3px; margin-bottom: 2px; font-size: 12px; color: #666;",
+                                                    onclick: move |_| {
+                                                        state.show_resources.set(true);
+                                                        state.show_code_editor.set(false);
+                                                        state.current_resource_target.set(Some(ResourceTarget::Form(form_name_res.clone())));
+                                                    },
+                                                    "📄 {form_name_res}.resx ({form_res_count})"
+                                                }
                                             }
                                         }
                                     }
@@ -77,7 +83,7 @@ pub fn ProjectExplorer() -> Element {
                                     for code_file in &proj.code_files {
                                         {
                                             let cf_name = code_file.name.clone();
-                                            let is_selected = *current_form.read() == Some(cf_name.clone());
+                                            let is_selected = *current_form.read() == Some(cf_name.clone()) && !*state.show_resources.read();
                                             let bg_color = if is_selected { "#e3f2fd" } else { "transparent" };
 
                                             rsx! {
@@ -87,6 +93,7 @@ pub fn ProjectExplorer() -> Element {
                                                     onclick: move |_| {
                                                         current_form.set(Some(cf_name.clone()));
                                                         state.show_code_editor.set(true);
+                                                        state.show_resources.set(false);
                                                     },
                                                     "  {cf_name}"
                                                 }
@@ -95,22 +102,63 @@ pub fn ProjectExplorer() -> Element {
                                     }
                                 }
 
-                                // Project Resources
-                                {
-                                    let is_res_selected = *state.show_resources.read();
-                                    let bg_color = if is_res_selected { "#e3f2fd" } else { "transparent" };
-                                    rsx! {
-                                        div {
-                                            style: "margin-top: 12px; font-weight: bold; margin-bottom: 4px;",
-                                            "⚙️ Config"
+                                // Project Resources section
+                                div {
+                                    style: "font-weight: bold; margin-top: 12px; margin-bottom: 4px;",
+                                    "⚙️ Resources"
+                                }
+                                
+                                // Show each project-level resource file
+                                if proj.resource_files.is_empty() {
+                                    // No resource files yet — show default "Resources" entry
+                                    {
+                                        let is_res_selected = *state.show_resources.read() && current_target == Some(ResourceTarget::Project(0));
+                                        let bg_color = if is_res_selected { "#e3f2fd" } else { "transparent" };
+                                        rsx! {
+                                            div {
+                                                style: "padding: 4px 8px; cursor: pointer; background: {bg_color}; border-radius: 3px; margin-bottom: 2px;",
+                                                onclick: move |_| {
+                                                    // Create the default Resources.resx on first click
+                                                    {
+                                                        let mut proj_w = state.project.write();
+                                                        if let Some(p) = proj_w.as_mut() {
+                                                            if p.resource_files.is_empty() {
+                                                                p.resource_files.push(irys_project::ResourceManager::new());
+                                                            }
+                                                        }
+                                                    }
+                                                    state.show_resources.set(true);
+                                                    state.show_code_editor.set(false);
+                                                    state.current_resource_target.set(Some(ResourceTarget::Project(0)));
+                                                },
+                                                "  Resources.resx"
+                                            }
                                         }
-                                        div {
-                                            style: "padding: 4px 8px; cursor: pointer; background: {bg_color}; border-radius: 3px; margin-bottom: 2px;",
-                                            onclick: move |_| {
-                                                state.show_resources.set(true);
-                                                state.show_code_editor.set(false);
-                                            },
-                                            "  Project Resources"
+                                    }
+                                } else {
+                                    for (idx, res_file) in proj.resource_files.iter().enumerate() {
+                                        {
+                                            let res_name = res_file.name.clone();
+                                            let res_count = res_file.resources.len();
+                                            let is_res_selected = *state.show_resources.read() && current_target == Some(ResourceTarget::Project(idx));
+                                            let bg_color = if is_res_selected { "#e3f2fd" } else { "transparent" };
+                                            let label = if res_count > 0 {
+                                                format!("  {res_name}.resx ({res_count})")
+                                            } else {
+                                                format!("  {res_name}.resx")
+                                            };
+                                            rsx! {
+                                                div {
+                                                    key: "res_{idx}",
+                                                    style: "padding: 4px 8px; cursor: pointer; background: {bg_color}; border-radius: 3px; margin-bottom: 2px;",
+                                                    onclick: move |_| {
+                                                        state.show_resources.set(true);
+                                                        state.show_code_editor.set(false);
+                                                        state.current_resource_target.set(Some(ResourceTarget::Project(idx)));
+                                                    },
+                                                    "{label}"
+                                                }
+                                            }
                                         }
                                     }
                                 }

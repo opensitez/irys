@@ -172,7 +172,8 @@ pub fn load_form_frm(path: &Path) -> SaveResult<FormModule> {
     form.fore_color = form_fore_color;
     form.font = form_font;
 
-    Ok(FormModule { form, code: real_code, format: FormFormat::Classic })
+    let form_name = form.name.clone();
+    Ok(FormModule { form, code: real_code, format: FormFormat::Classic, resources: crate::resources::ResourceManager::new_named(form_name) })
 }
 
 fn map_vb_type_to_control_type(vb_type: &str) -> ControlType {

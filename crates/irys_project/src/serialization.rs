@@ -12,11 +12,11 @@ use quick_xml::reader::Reader;
 pub fn save_project_auto(project: &Project, path: impl AsRef<Path>) -> SaveResult<()> {
     let path = path.as_ref();
     if let Some(ext) = path.extension() {
-        if ext.eq_ignore_ascii_case("vbproj") {
-            return save_project_vbproj(project, path);
+        if ext.eq_ignore_ascii_case("vbp") {
+            return save_project_vbp(project, path);
         }
     }
-    save_project_vbp(project, path)
+    save_project_vbproj(project, path)
 }
 
 pub fn save_project_vbproj(project: &Project, path: impl AsRef<Path>) -> SaveResult<()> {
