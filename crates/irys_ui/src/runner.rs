@@ -222,6 +222,9 @@ fn drain_console_effects(interp: &mut Interpreter) {
             RuntimeSideEffect::PropertyChange { .. } => {}
             RuntimeSideEffect::DataSourceChanged { .. } => {}
             RuntimeSideEffect::BindingPositionChanged { .. } => {}
+            RuntimeSideEffect::FormClose { .. } => {}
+            RuntimeSideEffect::FormShowDialog { .. } => {}
+            RuntimeSideEffect::AddControl { .. } => {}
         }
     }
 }

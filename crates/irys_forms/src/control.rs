@@ -55,6 +55,29 @@ pub enum ControlType {
 }
 
 impl ControlType {
+    /// Parse a control type name (case-insensitive) into a ControlType variant.
+    pub fn from_name(name: &str) -> Option<ControlType> {
+        match name.to_lowercase().as_str() {
+            "button" => Some(ControlType::Button),
+            "label" => Some(ControlType::Label),
+            "textbox" => Some(ControlType::TextBox),
+            "checkbox" => Some(ControlType::CheckBox),
+            "radiobutton" => Some(ControlType::RadioButton),
+            "combobox" => Some(ControlType::ComboBox),
+            "listbox" => Some(ControlType::ListBox),
+            "frame" | "groupbox" => Some(ControlType::Frame),
+            "picturebox" => Some(ControlType::PictureBox),
+            "richtextbox" => Some(ControlType::RichTextBox),
+            "webbrowser" => Some(ControlType::WebBrowser),
+            "treeview" => Some(ControlType::TreeView),
+            "datagridview" => Some(ControlType::DataGridView),
+            "panel" => Some(ControlType::Panel),
+            "listview" => Some(ControlType::ListView),
+            "bindingnavigator" => Some(ControlType::BindingNavigator),
+            _ => None,
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             ControlType::Button => "Button",

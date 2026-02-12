@@ -53,6 +53,24 @@ pub enum RuntimeSideEffect {
         position: i32,
         count: i32,
     },
+    /// Close a form (fires FormClosing then FormClosed).
+    FormClose {
+        form_name: String,
+    },
+    /// Show a user form as a modal dialog.
+    FormShowDialog {
+        form_name: String,
+    },
+    /// Dynamically add a control to a form at runtime.
+    AddControl {
+        form_name: String,
+        control_name: String,
+        control_type: String,
+        left: i32,
+        top: i32,
+        width: i32,
+        height: i32,
+    },
 }
 
 // ---------------------------------------------------------------------------

@@ -61,10 +61,10 @@ statement = _{
     | write_file_statement
     | input_file_statement
     | call_statement
+    | addhandler_statement
+    | removehandler_statement
     | expression_statement
 }
-
-// Declarations
 dim_new_keyword = { ^"New" }
 dim_statement = {
     ^"Dim" ~ identifier ~
@@ -95,6 +95,8 @@ single_line_stmt = _{
     | dot_assign_statement
     | me_assign_statement
     | assign_statement
+    | addhandler_statement
+    | removehandler_statement
     | call_statement
     | expression_statement
 }
@@ -386,6 +388,11 @@ call_statement = {
     )
 }
 expression_statement = { dot_call_statement | me_member_call | member_call | call_expression | member_access | dot_member_access }
+
+// AddHandler / RemoveHandler
+addressof_expr = { ^"AddressOf" ~ dotted_identifier }
+addhandler_statement = { ^"AddHandler" ~ dotted_identifier ~ "," ~ addressof_expr }
+removehandler_statement = { ^"RemoveHandler" ~ dotted_identifier ~ "," ~ addressof_expr }
 
 member_access = { identifier ~ ("." ~ member_identifier)+ }
 argument_list = { expression ~ ("," ~ expression)* }

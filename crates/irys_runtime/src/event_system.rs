@@ -20,6 +20,18 @@ impl EventSystem {
         self.handlers.insert(key, handler_name.into());
     }
 
+    /// Alias used by AddHandler statement
+    pub fn register_handler(&mut self, control_name: &str, event_type: &EventType, handler_name: &str) {
+        let key = format!("{}_{}", control_name.to_lowercase(), event_type.as_str().to_lowercase());
+        self.handlers.insert(key, handler_name.to_string());
+    }
+
+    /// Remove a handler (used by RemoveHandler statement)
+    pub fn remove_handler(&mut self, control_name: &str, event_type: &EventType, _handler_name: &str) {
+        let key = format!("{}_{}", control_name.to_lowercase(), event_type.as_str().to_lowercase());
+        self.handlers.remove(&key);
+    }
+
     pub fn get_handler(&self, control_name: &str, event_type: &EventType) -> Option<&str> {
         let key = format!("{}_{}", control_name.to_lowercase(), event_type.as_str().to_lowercase());
         self.handlers.get(&key).map(|s| s.as_str())

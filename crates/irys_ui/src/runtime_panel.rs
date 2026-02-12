@@ -261,6 +261,12 @@ fn process_side_effects(
                                             }
                                         }
                                         "caption" => ctrl.set_caption(value.as_string()),
+                                        "left" => { if let irys_runtime::Value::Integer(v) = &value { ctrl.bounds.x = *v; } },
+                                        "top" => { if let irys_runtime::Value::Integer(v) = &value { ctrl.bounds.y = *v; } },
+                                        "width" => { if let irys_runtime::Value::Integer(v) = &value { ctrl.bounds.width = *v; } },
+                                        "height" => { if let irys_runtime::Value::Integer(v) = &value { ctrl.bounds.height = *v; } },
+                                        "visible" => { ctrl.properties.set_raw("Visible", irys_forms::PropertyValue::Boolean(value.as_bool().unwrap_or(true))); },
+                                        "enabled" => { ctrl.properties.set_raw("Enabled", irys_forms::PropertyValue::Boolean(value.as_bool().unwrap_or(true))); },
                                         "backcolor" => ctrl.set_back_color(value.as_string()),
                                         "forecolor" => ctrl.set_fore_color(value.as_string()),
                                         "font" => ctrl.set_font(value.as_string()),
@@ -340,6 +346,61 @@ fn process_side_effects(
                                 let count_text = format!("{} of {}", position + 1, count);
                                 ctrl.set_text(count_text);
                             }
+                        }
+                    }
+                }
+            }
+            RuntimeSideEffect::FormClose { form_name } => {
+                // Fire FormClosing event, check Cancel, then fire FormClosed, then hide
+                let closing_args = interp.make_event_handler_args(&form_name, "FormClosing");
+                let _ = interp.call_event_handler(&format!("{}_FormClosing", form_name), &closing_args);
+                // Check if Cancel was set to True on the EventArgs
+                let cancel = if let Value::Object(ref ea) = closing_args[1] {
+                    ea.borrow().fields.get("cancel").map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false)
+                } else {
+                    false
+                };
+                if !cancel {
+                    let closed_args = interp.make_event_handler_args(&form_name, "FormClosed");
+                    let _ = interp.call_event_handler(&format!("{}_FormClosed", form_name), &closed_args);
+                    // Hide the form — read first, then set
+                    let should_close = runtime_form.read().as_ref()
+                        .map(|frm| frm.name.eq_ignore_ascii_case(&form_name))
+                        .unwrap_or(false);
+                    if should_close {
+                        runtime_form.set(None);
+                    }
+                }
+            }
+            RuntimeSideEffect::FormShowDialog { form_name } => {
+                // Show another form as modal (same as Show for now — full modal requires blocking)
+                let project_read = rp.project.read();
+                if let Some(proj) = project_read.as_ref() {
+                    if let Some(form_module) = proj.forms.iter().find(|f| f.form.name.eq_ignore_ascii_case(&form_name)) {
+                        let switch_code = if form_module.is_vbnet() {
+                            format!("{}\n{}", form_module.get_designer_code(), form_module.get_user_code())
+                        } else {
+                            form_module.get_user_code().to_string()
+                        };
+                        if let Ok(prog) = parse_program(&switch_code) {
+                            let _ = interp.load_module(&form_module.form.name, &prog);
+                            let load_args = interp.make_event_handler_args(&form_module.form.name, "Load");
+                            let _ = interp.call_event_handler(&format!("{}_Load", form_module.form.name), &load_args);
+                            runtime_form.set(Some(form_module.form.clone()));
+                        }
+                    }
+                }
+            }
+            RuntimeSideEffect::AddControl { form_name, control_name, control_type, left, top, width, height } => {
+                // Dynamically add a control at runtime
+                if let Some(frm) = runtime_form.write().as_mut() {
+                    if frm.name.eq_ignore_ascii_case(&form_name) || form_name.is_empty() {
+                        let ct = irys_forms::ControlType::from_name(&control_type);
+                        if let Some(ct) = ct {
+                            let mut ctrl = irys_forms::Control::new(ct, control_name.clone(), left, top);
+                            ctrl.bounds.width = width;
+                            ctrl.bounds.height = height;
+                            frm.controls.push(ctrl);
                         }
                     }
                 }
@@ -686,6 +747,14 @@ pub fn FormRunner() -> Element {
                                     }
                                 }
                                 process_side_effects(&mut interp, rp, &mut runtime_form, &mut msgbox_content);
+
+                                // Fire Shown event after the form is first displayed
+                                let shown_form_name = runtime_form.read().as_ref().map(|frm| frm.name.clone());
+                                if let Some(fname) = shown_form_name {
+                                    let shown_args = interp.make_event_handler_args(&fname, "Shown");
+                                    let _ = interp.call_event_handler(&format!("{}_Shown", fname), &shown_args);
+                                    process_side_effects(&mut interp, rp, &mut runtime_form, &mut msgbox_content);
+                                }
                             }
                         }
                         Err(e) => {
@@ -1102,7 +1171,16 @@ pub fn FormRunner() -> Element {
                                     align-items: center;
                                     font-weight: bold;
                                 ",
-                                "{caption}"
+                                span { style: "flex: 1;", "{caption}" }
+                                // Close button
+                                button {
+                                    style: "background: transparent; border: none; color: white; font-size: 16px; cursor: pointer; padding: 0 4px; margin-left: auto; font-weight: bold; line-height: 1;",
+                                    onclick: move |_| {
+                                        let form_name_close = form.name.clone();
+                                        handle_event(form_name_close, "FormClosing".to_string(), None);
+                                    },
+                                    "\u{00D7}"
+                                }
                             }
 
                             // Controls (skip non-visual components)
@@ -1125,6 +1203,8 @@ pub fn FormRunner() -> Element {
                                     let name_keyup = name.clone();
                                     let name_keypress = name.clone();
                                     let name_dblclick = name.clone();
+                                    let name_focusin = name.clone();
+                                    let name_focusout = name.clone();
 
                                     let caption = control.get_caption().map(|s| s.to_string()).unwrap_or(name.clone());
                                     let text = control.get_text().map(|s| s.to_string()).unwrap_or_default();
@@ -1163,11 +1243,22 @@ pub fn FormRunner() -> Element {
                                         base_button_bg.to_string()
                                     };
 
+                                    // Compute Dock-based positioning
+                                    let dock_val = control.properties.get_int("Dock").unwrap_or(0);
+                                    let wrapper_style = match dock_val {
+                                        1 => "position: absolute; left: 0; top: 0; width: 100%; outline: none;".to_string(), // DockStyle.Top
+                                        2 => "position: absolute; left: 0; bottom: 0; width: 100%; outline: none;".to_string(), // DockStyle.Bottom
+                                        3 => "position: absolute; left: 0; top: 0; height: 100%; outline: none;".to_string(), // DockStyle.Left
+                                        4 => "position: absolute; right: 0; top: 0; height: 100%; outline: none;".to_string(), // DockStyle.Right
+                                        5 => "position: absolute; left: 0; top: 0; width: 100%; height: 100%; outline: none;".to_string(), // DockStyle.Fill
+                                        _ => format!("position: absolute; left: {}px; top: {}px; width: {}px; height: {}px; outline: none;", x, y, w, h),
+                                    };
+
                                     rsx! {
                                         if is_visible {
                                             div {
                                                 tabindex: "0",
-                                                style: "position: absolute; left: {x}px; top: {y}px; width: {w}px; height: {h}px; outline: none;",
+                                                style: "{wrapper_style}",
                                                 onmousemove: move |evt: MouseEvent| {
                                                     let data = irys_runtime::EventData::Mouse {
                                                         button: 0, clicks: 0,
@@ -1252,6 +1343,26 @@ pub fn FormRunner() -> Element {
                                                         alt: evt.modifiers().alt(),
                                                     };
                                                     handle_event(name_keyup.clone(), "KeyUp".to_string(), Some(data));
+                                                },
+                                                onkeypress: move |evt: KeyboardEvent| {
+                                                    // KeyPress fires for character keys — extract the char
+                                                    let ch = match evt.key() {
+                                                        dioxus::prelude::Key::Character(ref s) => s.chars().next().unwrap_or('\0'),
+                                                        dioxus::prelude::Key::Enter => '\r',
+                                                        dioxus::prelude::Key::Tab => '\t',
+                                                        dioxus::prelude::Key::Backspace => '\x08',
+                                                        _ => '\0',
+                                                    };
+                                                    if ch != '\0' {
+                                                        let data = irys_runtime::EventData::KeyPress { key_char: ch };
+                                                        handle_event(name_keypress.clone(), "KeyPress".to_string(), Some(data));
+                                                    }
+                                                },
+                                                onfocusin: move |_evt: FocusEvent| {
+                                                    handle_event(name_focusin.clone(), "GotFocus".to_string(), None);
+                                                },
+                                                onfocusout: move |_evt: FocusEvent| {
+                                                    handle_event(name_focusout.clone(), "LostFocus".to_string(), None);
                                                 },
 
                                                 {match control_type {

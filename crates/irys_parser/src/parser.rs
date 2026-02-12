@@ -758,6 +758,20 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
             let expr = parse_expression(pair.into_inner().next().unwrap())?;
             Ok(Statement::ExpressionStatement(expr))
         }
+        Rule::addhandler_statement => {
+            let mut inner = pair.into_inner();
+            let event_target = inner.next().unwrap().as_str().to_string();
+            let addressof = inner.next().unwrap(); // addressof_expr
+            let handler = addressof.into_inner().next().unwrap().as_str().to_string();
+            Ok(Statement::AddHandler { event_target, handler })
+        }
+        Rule::removehandler_statement => {
+            let mut inner = pair.into_inner();
+            let event_target = inner.next().unwrap().as_str().to_string();
+            let addressof = inner.next().unwrap(); // addressof_expr
+            let handler = addressof.into_inner().next().unwrap().as_str().to_string();
+            Ok(Statement::RemoveHandler { event_target, handler })
+        }
         _ => Err(ParseError::UnexpectedRule(pair.as_rule())),
     }
 }

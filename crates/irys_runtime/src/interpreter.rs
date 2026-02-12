@@ -262,6 +262,46 @@ impl Interpreter {
         })))
     }
 
+    // ── System.Drawing struct factories ──────────────────────────────────
+
+    pub fn make_point(x: i32, y: i32) -> Value {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__type".to_string(), Value::String("Point".to_string()));
+        fields.insert("x".to_string(), Value::Integer(x));
+        fields.insert("y".to_string(), Value::Integer(y));
+        fields.insert("isempty".to_string(), Value::Boolean(x == 0 && y == 0));
+        Value::Object(std::rc::Rc::new(std::cell::RefCell::new(crate::value::ObjectData {
+            class_name: "Point".to_string(), fields,
+        })))
+    }
+
+    pub fn make_size(w: i32, h: i32) -> Value {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__type".to_string(), Value::String("Size".to_string()));
+        fields.insert("width".to_string(), Value::Integer(w));
+        fields.insert("height".to_string(), Value::Integer(h));
+        fields.insert("isempty".to_string(), Value::Boolean(w == 0 && h == 0));
+        Value::Object(std::rc::Rc::new(std::cell::RefCell::new(crate::value::ObjectData {
+            class_name: "Size".to_string(), fields,
+        })))
+    }
+
+    pub fn make_rectangle(x: i32, y: i32, w: i32, h: i32) -> Value {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__type".to_string(), Value::String("Rectangle".to_string()));
+        fields.insert("x".to_string(), Value::Integer(x));
+        fields.insert("y".to_string(), Value::Integer(y));
+        fields.insert("width".to_string(), Value::Integer(w));
+        fields.insert("height".to_string(), Value::Integer(h));
+        fields.insert("left".to_string(), Value::Integer(x));
+        fields.insert("top".to_string(), Value::Integer(y));
+        fields.insert("right".to_string(), Value::Integer(x + w));
+        fields.insert("bottom".to_string(), Value::Integer(y + h));
+        Value::Object(std::rc::Rc::new(std::cell::RefCell::new(crate::value::ObjectData {
+            class_name: "Rectangle".to_string(), fields,
+        })))
+    }
+
     /// Create a System.Windows.Forms.MouseEventArgs object.
     pub fn make_mouse_event_args(button: i32, clicks: i32, x: i32, y: i32, delta: i32) -> Value {
         let mut fields = std::collections::HashMap::new();
@@ -271,7 +311,7 @@ impl Interpreter {
         fields.insert("x".to_string(), Value::Integer(x));
         fields.insert("y".to_string(), Value::Integer(y));
         fields.insert("delta".to_string(), Value::Integer(delta));
-        fields.insert("location".to_string(), Value::String(format!("{{X={},Y={}}}", x, y)));
+        fields.insert("location".to_string(), Self::make_point(x, y));
         Value::Object(std::rc::Rc::new(std::cell::RefCell::new(crate::value::ObjectData {
             class_name: "MouseEventArgs".to_string(),
             fields,
@@ -1058,6 +1098,50 @@ impl Interpreter {
                         };
                         obj_ref.borrow_mut().fields.insert(member_lower.clone(), store_val);
 
+                        // Decompose compound property assignments (Location, Size, Font)
+                        let is_control = obj_ref.borrow().fields.get("__is_control")
+                            .map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
+                        if is_control {
+                            match member_lower.as_str() {
+                                "location" => {
+                                    // Extract X/Y from Point object and set Left/Top
+                                    if let Value::Object(pt) = &val {
+                                        let ptb = pt.borrow();
+                                        if let Some(xv) = ptb.fields.get("x") {
+                                            obj_ref.borrow_mut().fields.insert("left".to_string(), xv.clone());
+                                        }
+                                        if let Some(yv) = ptb.fields.get("y") {
+                                            obj_ref.borrow_mut().fields.insert("top".to_string(), yv.clone());
+                                        }
+                                    }
+                                }
+                                "size" => {
+                                    // Extract Width/Height from Size object
+                                    if let Value::Object(sz) = &val {
+                                        let szb = sz.borrow();
+                                        if let Some(wv) = szb.fields.get("width") {
+                                            obj_ref.borrow_mut().fields.insert("width".to_string(), wv.clone());
+                                        }
+                                        if let Some(hv) = szb.fields.get("height") {
+                                            obj_ref.borrow_mut().fields.insert("height".to_string(), hv.clone());
+                                        }
+                                    }
+                                }
+                                "clientsize" => {
+                                    if let Value::Object(sz) = &val {
+                                        let szb = sz.borrow();
+                                        if let Some(wv) = szb.fields.get("width") {
+                                            obj_ref.borrow_mut().fields.insert("width".to_string(), wv.clone());
+                                        }
+                                        if let Some(hv) = szb.fields.get("height") {
+                                            obj_ref.borrow_mut().fields.insert("height".to_string(), hv.clone());
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
                         // If this looks like a control object, push a side-effect so the UI can sync
                         let mut obj_name: Option<String> = None;
                         if let Some(Value::String(name_val)) = obj_ref.borrow().fields.get("name") {
@@ -1409,6 +1493,43 @@ impl Interpreter {
                     // Re-throw current exception (Throw without expression)
                     return Err(RuntimeError::Exception("Exception".to_string(), "An exception was thrown".to_string(), None));
                 }
+            }
+
+            Statement::AddHandler { event_target, handler } => {
+                // event_target = "Button1.Click", handler = "HandleClick" or "Me.HandleClick"
+                let parts: Vec<&str> = event_target.splitn(2, '.').collect();
+                if parts.len() == 2 {
+                    let control = parts[0].to_string();
+                    let event = parts[1].to_string();
+                    // Resolve the handler name: strip "Me." prefix if present
+                    let handler_name = if handler.to_lowercase().starts_with("me.") {
+                        handler[3..].to_string()
+                    } else {
+                        handler.clone()
+                    };
+                    // Register in the event system
+                    if let Some(event_type) = irys_forms::EventType::from_name(&event) {
+                        self.events.register_handler(&control, &event_type, &handler_name);
+                    }
+                }
+                Ok(())
+            }
+
+            Statement::RemoveHandler { event_target, handler } => {
+                let parts: Vec<&str> = event_target.splitn(2, '.').collect();
+                if parts.len() == 2 {
+                    let control = parts[0].to_string();
+                    let event = parts[1].to_string();
+                    let handler_name = if handler.to_lowercase().starts_with("me.") {
+                        handler[3..].to_string()
+                    } else {
+                        handler.clone()
+                    };
+                    if let Some(event_type) = irys_forms::EventType::from_name(&event) {
+                        self.events.remove_handler(&control, &event_type, &handler_name);
+                    }
+                }
+                Ok(())
             }
 
             Statement::Try { body, catches, finally } => {
@@ -2402,13 +2523,120 @@ impl Interpreter {
                     return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
                 }
 
+                // ===== SYSTEM.DRAWING.POINT =====
+                if class_name == "point" || class_name == "system.drawing.point" {
+                    let arg_values: Result<Vec<_>, _> = ctor_args.iter().map(|e| self.evaluate_expr(e)).collect();
+                    let arg_values = arg_values?;
+                    let x = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                    let y = arg_values.get(1).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Point".to_string()));
+                    fields.insert("x".to_string(), Value::Integer(x));
+                    fields.insert("y".to_string(), Value::Integer(y));
+                    fields.insert("isempty".to_string(), Value::Boolean(x == 0 && y == 0));
+                    let obj = crate::value::ObjectData { class_name: "Point".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // ===== SYSTEM.DRAWING.SIZE =====
+                if class_name == "size" || class_name == "system.drawing.size" {
+                    let arg_values: Result<Vec<_>, _> = ctor_args.iter().map(|e| self.evaluate_expr(e)).collect();
+                    let arg_values = arg_values?;
+                    let w = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                    let h = arg_values.get(1).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Size".to_string()));
+                    fields.insert("width".to_string(), Value::Integer(w));
+                    fields.insert("height".to_string(), Value::Integer(h));
+                    fields.insert("isempty".to_string(), Value::Boolean(w == 0 && h == 0));
+                    let obj = crate::value::ObjectData { class_name: "Size".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // ===== SYSTEM.DRAWING.RECTANGLE =====
+                if class_name == "rectangle" || class_name == "system.drawing.rectangle" {
+                    let arg_values: Result<Vec<_>, _> = ctor_args.iter().map(|e| self.evaluate_expr(e)).collect();
+                    let arg_values = arg_values?;
+                    let x = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                    let y = arg_values.get(1).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                    let w = arg_values.get(2).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                    let h = arg_values.get(3).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Rectangle".to_string()));
+                    fields.insert("x".to_string(), Value::Integer(x));
+                    fields.insert("y".to_string(), Value::Integer(y));
+                    fields.insert("width".to_string(), Value::Integer(w));
+                    fields.insert("height".to_string(), Value::Integer(h));
+                    fields.insert("left".to_string(), Value::Integer(x));
+                    fields.insert("top".to_string(), Value::Integer(y));
+                    fields.insert("right".to_string(), Value::Integer(x + w));
+                    fields.insert("bottom".to_string(), Value::Integer(y + h));
+                    let obj = crate::value::ObjectData { class_name: "Rectangle".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // ===== SYSTEM.DRAWING.FONT =====
+                if class_name == "font" || class_name == "system.drawing.font" {
+                    let arg_values: Result<Vec<_>, _> = ctor_args.iter().map(|e| self.evaluate_expr(e)).collect();
+                    let arg_values = arg_values?;
+                    let family = arg_values.get(0).map(|v| v.as_string()).unwrap_or("Microsoft Sans Serif".to_string());
+                    let size = arg_values.get(1).map(|v| match v { Value::Double(d) => *d, Value::Integer(i) => *i as f64, _ => 8.25 }).unwrap_or(8.25);
+                    let style = arg_values.get(2).and_then(|v| v.as_integer().ok()).unwrap_or(0); // 0=Regular
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Font".to_string()));
+                    fields.insert("name".to_string(), Value::String(family.clone()));
+                    fields.insert("fontfamily".to_string(), Value::String(family));
+                    fields.insert("size".to_string(), Value::Double(size));
+                    fields.insert("sizeininpoints".to_string(), Value::Double(size));
+                    fields.insert("bold".to_string(), Value::Boolean(style & 1 != 0));
+                    fields.insert("italic".to_string(), Value::Boolean(style & 2 != 0));
+                    fields.insert("underline".to_string(), Value::Boolean(style & 4 != 0));
+                    fields.insert("strikeout".to_string(), Value::Boolean(style & 8 != 0));
+                    fields.insert("style".to_string(), Value::Integer(style));
+                    let obj = crate::value::ObjectData { class_name: "Font".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // ===== SYSTEM.DRAWING.COLOR =====
+                if class_name == "color" || class_name == "system.drawing.color" {
+                    // Color.FromArgb is handled separately; New Color() returns Empty
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Color".to_string()));
+                    fields.insert("r".to_string(), Value::Integer(0));
+                    fields.insert("g".to_string(), Value::Integer(0));
+                    fields.insert("b".to_string(), Value::Integer(0));
+                    fields.insert("a".to_string(), Value::Integer(255));
+                    fields.insert("name".to_string(), Value::String("Empty".to_string()));
+                    fields.insert("isempty".to_string(), Value::Boolean(true));
+                    let obj = crate::value::ObjectData { class_name: "Color".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
                 if class_name.starts_with("system.windows.forms.")
                     && class_name != "system.windows.forms.bindingsource"
                     && class_name != "system.windows.forms.bindingnavigator"
                 {
-                    // Return the base name as a proxy for controls (e.g. "Button", "Label")
+                    // Create a proper control object with fields that mimic WinForms properties
                     let base_name = class_id.as_str().split('.').last().unwrap_or(class_id.as_str()).to_string();
-                    return Ok(Value::String(base_name));
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String(base_name.clone()));
+                    fields.insert("__is_control".to_string(), Value::Boolean(true));
+                    fields.insert("name".to_string(), Value::String(String::new()));
+                    fields.insert("text".to_string(), Value::String(String::new()));
+                    fields.insert("caption".to_string(), Value::String(String::new()));
+                    fields.insert("visible".to_string(), Value::Boolean(true));
+                    fields.insert("enabled".to_string(), Value::Boolean(true));
+                    fields.insert("left".to_string(), Value::Integer(0));
+                    fields.insert("top".to_string(), Value::Integer(0));
+                    fields.insert("width".to_string(), Value::Integer(100));
+                    fields.insert("height".to_string(), Value::Integer(30));
+                    fields.insert("tag".to_string(), Value::Nothing);
+                    fields.insert("tabindex".to_string(), Value::Integer(0));
+                    fields.insert("backcolor".to_string(), Value::String(String::new()));
+                    fields.insert("forecolor".to_string(), Value::String(String::new()));
+                    fields.insert("font".to_string(), Value::Nothing);
+                    let obj = crate::value::ObjectData { class_name: base_name, fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
                 }
 
                 if class_name.starts_with("system.drawing.") 
@@ -3630,6 +3858,44 @@ impl Interpreter {
 
                     // Handle WinForms infrastructure properties that don't exist as real fields
                     let member_lower = member.as_str().to_lowercase();
+                    
+                    // Computed properties for control objects
+                    {
+                        let is_ctrl = obj_ref.borrow().fields.get("__is_control")
+                            .map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
+                        if is_ctrl {
+                            match member_lower.as_str() {
+                                "location" => {
+                                    let b = obj_ref.borrow();
+                                    let x = b.fields.get("left").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let y = b.fields.get("top").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    return Ok(Self::make_point(x, y));
+                                }
+                                "size" => {
+                                    let b = obj_ref.borrow();
+                                    let w = b.fields.get("width").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let h = b.fields.get("height").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    return Ok(Self::make_size(w, h));
+                                }
+                                "clientsize" => {
+                                    let b = obj_ref.borrow();
+                                    let w = b.fields.get("width").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let h = b.fields.get("height").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    return Ok(Self::make_size(w, h));
+                                }
+                                "bounds" => {
+                                    let b = obj_ref.borrow();
+                                    let x = b.fields.get("left").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let y = b.fields.get("top").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let w = b.fields.get("width").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let h = b.fields.get("height").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    return Ok(Self::make_rectangle(x, y, w, h));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
                     match member_lower.as_str() {
                         "controls" | "components" => return Ok(Value::Nothing),
                         "databindings" => {
@@ -4174,10 +4440,37 @@ impl Interpreter {
             _ => {}
         }
 
-        // Handle Controls.Add - a common designer pattern
+        // Handle Controls.Add — add control dynamically to the running form
         if method_name == "add" {
             if let Expression::MemberAccess(_, member) = obj {
                 if member.as_str().eq_ignore_ascii_case("Controls") {
+                    // Evaluate the argument to get the control object
+                    if !args.is_empty() {
+                        let ctrl_val = self.evaluate_expr(&args[0])?;
+                        match &ctrl_val {
+                            Value::Object(ctrl_obj) => {
+                                let b = ctrl_obj.borrow();
+                                let ctrl_type = b.fields.get("__type").map(|v| v.as_string()).unwrap_or_default();
+                                let ctrl_name = b.fields.get("name").map(|v| v.as_string()).unwrap_or_default();
+                                let left = b.fields.get("left").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                let top = b.fields.get("top").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                let width = b.fields.get("width").and_then(|v| v.as_integer().ok()).unwrap_or(100);
+                                let height = b.fields.get("height").and_then(|v| v.as_integer().ok()).unwrap_or(30);
+                                if !ctrl_name.is_empty() {
+                                    self.side_effects.push_back(crate::RuntimeSideEffect::AddControl {
+                                        form_name: String::new(), // empty = current form
+                                        control_name: ctrl_name,
+                                        control_type: ctrl_type,
+                                        left, top, width, height,
+                                    });
+                                }
+                            }
+                            Value::String(proxy_name) => {
+                                // Legacy string proxy fallback — just a no-op
+                            }
+                            _ => {}
+                        }
+                    }
                     return Ok(Value::Nothing);
                 }
             }
@@ -8539,6 +8832,34 @@ impl Interpreter {
                         value: arg_values[0].clone(),
                     });
                 }
+                Ok(Value::Nothing)
+            }
+            "close" | "dispose" => {
+                // Form.Close() — fire FormClosing, then FormClosed, then hide
+                self.side_effects.push_back(crate::RuntimeSideEffect::FormClose {
+                    form_name: object_name.clone(),
+                });
+                Ok(Value::Nothing)
+            }
+            "showdialog" => {
+                // Form.ShowDialog() — show form as modal dialog
+                self.side_effects.push_back(crate::RuntimeSideEffect::FormShowDialog {
+                    form_name: object_name.clone(),
+                });
+                // Return DialogResult.OK (1) as default
+                Ok(Value::Integer(1))
+            }
+            "focus" | "select" | "activate" => {
+                // Focus/Select — no-op in web renderer but don't error
+                Ok(Value::Nothing)
+            }
+            "bringtofront" | "sendtoback" => {
+                Ok(Value::Nothing)
+            }
+            "refresh" | "invalidate" | "update" | "performlayout" | "suspendlayout" | "resumelayout" => {
+                Ok(Value::Nothing)
+            }
+            "centertoscreen" | "centertoparent" => {
                 Ok(Value::Nothing)
             }
             _ => Err(RuntimeError::Custom(format!("Unknown method: {}", method_name))),

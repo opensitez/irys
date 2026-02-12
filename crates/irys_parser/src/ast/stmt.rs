@@ -127,6 +127,18 @@ pub enum Statement {
     // Throw exception
     Throw(Option<Expression>),
 
+    // AddHandler obj.Event, AddressOf handler
+    AddHandler {
+        event_target: String,  // e.g. "Button1.Click"
+        handler: String,       // e.g. "HandleClick" or "Me.HandleClick"
+    },
+
+    // RemoveHandler obj.Event, AddressOf handler
+    RemoveHandler {
+        event_target: String,
+        handler: String,
+    },
+
     // Continue
     Continue(ContinueType),
 

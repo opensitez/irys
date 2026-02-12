@@ -120,6 +120,55 @@ impl EventType {
         }
     }
 
+    /// Parse an event name string into an EventType variant (case-insensitive).
+    pub fn from_name(name: &str) -> Option<EventType> {
+        match name.to_lowercase().as_str() {
+            "click" => Some(EventType::Click),
+            "dblclick" => Some(EventType::DblClick),
+            "doubleclick" => Some(EventType::DoubleClick),
+            "load" => Some(EventType::Load),
+            "unload" => Some(EventType::Unload),
+            "change" => Some(EventType::Change),
+            "textchanged" => Some(EventType::TextChanged),
+            "selectedindexchanged" => Some(EventType::SelectedIndexChanged),
+            "checkedchanged" => Some(EventType::CheckedChanged),
+            "valuechanged" => Some(EventType::ValueChanged),
+            "keypress" => Some(EventType::KeyPress),
+            "keydown" => Some(EventType::KeyDown),
+            "keyup" => Some(EventType::KeyUp),
+            "mouseclick" => Some(EventType::MouseClick),
+            "mousedoubleclick" => Some(EventType::MouseDoubleClick),
+            "mousedown" => Some(EventType::MouseDown),
+            "mouseup" => Some(EventType::MouseUp),
+            "mousemove" => Some(EventType::MouseMove),
+            "mouseenter" => Some(EventType::MouseEnter),
+            "mouseleave" => Some(EventType::MouseLeave),
+            "mousewheel" => Some(EventType::MouseWheel),
+            "gotfocus" => Some(EventType::GotFocus),
+            "lostfocus" => Some(EventType::LostFocus),
+            "enter" => Some(EventType::Enter),
+            "leave" => Some(EventType::Leave),
+            "validated" => Some(EventType::Validated),
+            "validating" => Some(EventType::Validating),
+            "resize" => Some(EventType::Resize),
+            "paint" => Some(EventType::Paint),
+            "formclosing" => Some(EventType::FormClosing),
+            "formclosed" => Some(EventType::FormClosed),
+            "shown" => Some(EventType::Shown),
+            "activated" => Some(EventType::Activated),
+            "deactivate" => Some(EventType::Deactivate),
+            "tick" => Some(EventType::Tick),
+            "elapsed" => Some(EventType::Elapsed),
+            "scroll" => Some(EventType::Scroll),
+            "selectedvaluechanged" => Some(EventType::SelectedValueChanged),
+            "cellclick" => Some(EventType::CellClick),
+            "celldoubleclick" => Some(EventType::CellDoubleClick),
+            "cellvaluechanged" => Some(EventType::CellValueChanged),
+            "selectionchanged" => Some(EventType::SelectionChanged),
+            _ => None,
+        }
+    }
+
     pub fn is_applicable_to(&self, control_type: Option<crate::ControlType>) -> bool {
         use crate::ControlType;
         
