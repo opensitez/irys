@@ -159,7 +159,14 @@ impl Value {
             Value::HashSet(h) => format!("[HashSet Count={}]", h.borrow().count()),
             Value::Dictionary(d) => format!("[Dictionary Count={}]", d.borrow().count()),
             Value::Nothing => "Nothing".to_string(),
-            Value::Object(obj_ref) => format!("[Object {}]", obj_ref.borrow().class_name),
+            Value::Object(obj_ref) => {
+                let b = obj_ref.borrow();
+                // StringBuilder: return the buffer content
+                if b.class_name == "StringBuilder" {
+                    return b.fields.get("__data").map(|v| v.as_string()).unwrap_or_default();
+                }
+                format!("[Object {}]", b.class_name)
+            }
             Value::Lambda { .. } => "[Lambda]".to_string(),
         }
     }

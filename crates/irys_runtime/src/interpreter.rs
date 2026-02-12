@@ -549,6 +549,12 @@ impl Interpreter {
         self.env.define_const("vbcrlf", Value::String("\r\n".to_string()));
         self.env.define_const("vbnewline", Value::String("\r\n".to_string()));
         self.env.define_const("vbtab", Value::String("\t".to_string()));
+        self.env.define_const("vblf", Value::String("\n".to_string()));
+        self.env.define_const("vbcr", Value::String("\r".to_string()));
+        self.env.define_const("vbnullchar", Value::String("\0".to_string()));
+        self.env.define_const("vbnullstring", Value::String(String::new()));
+        self.env.define_const("vbback", Value::String("\x08".to_string()));
+        self.env.define_const("vbformfeed", Value::String("\x0C".to_string()));
         self.env.define_const("vbbinarycompare", Value::Integer(0));
         self.env.define_const("vbtextcompare", Value::Integer(1));
 
@@ -569,6 +575,17 @@ impl Interpreter {
         self.env.define_const("regexoptions.multiline", Value::Integer(2));
         self.env.define_const("regexoptions.singleline", Value::Integer(16));
         self.env.define_const("regexoptions.ignorepatternwhitespace", Value::Integer(32));
+
+        // StringSplitOptions constants
+        self.env.define_const("stringsplitoptions.none", Value::Integer(0));
+        self.env.define_const("stringsplitoptions.removeemptyentries", Value::Integer(1));
+        self.env.define_const("stringsplitoptions.trimentriesandremoveemptyentries", Value::Integer(3));
+
+        // StringComparison constants
+        self.env.define_const("stringcomparison.ordinal", Value::Integer(4));
+        self.env.define_const("stringcomparison.ordinalignorecase", Value::Integer(5));
+        self.env.define_const("stringcomparison.currentculture", Value::Integer(0));
+        self.env.define_const("stringcomparison.currentcultureignorecase", Value::Integer(1));
     }
 
     pub fn run(&mut self, program: &Program) -> Result<(), RuntimeError> {
@@ -1096,9 +1113,25 @@ impl Interpreter {
                         } else {
                             val.clone()
                         };
-                        obj_ref.borrow_mut().fields.insert(member_lower.clone(), store_val);
+                        obj_ref.borrow_mut().fields.insert(member_lower.clone(), store_val.clone());
 
-                        // Decompose compound property assignments (Location, Size, Font)
+                        // StringBuilder.Length setter: truncate or pad the buffer
+                        if obj_type == "StringBuilder" && member_lower == "length" {
+                            if let Ok(new_len) = store_val.as_integer() {
+                                let new_len = new_len as usize;
+                                let mut borrow = obj_ref.borrow_mut();
+                                if let Some(Value::String(buf)) = borrow.fields.get("__data").cloned() {
+                                    let mut chars: Vec<char> = buf.chars().collect();
+                                    if new_len < chars.len() {
+                                        chars.truncate(new_len);
+                                    } else {
+                                        chars.resize(new_len, '\0');
+                                    }
+                                    let new_buf: String = chars.into_iter().collect();
+                                    borrow.fields.insert("__data".to_string(), Value::String(new_buf));
+                                }
+                            }
+                        }
                         let is_control = obj_ref.borrow().fields.get("__is_control")
                             .map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
                         if is_control {
@@ -2610,6 +2643,13 @@ impl Interpreter {
                     fields.insert("isempty".to_string(), Value::Boolean(true));
                     let obj = crate::value::ObjectData { class_name: "Color".to_string(), fields };
                     return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // ===== STRINGBUILDER =====
+                if class_name == "stringbuilder" || class_name == "system.text.stringbuilder" {
+                    let arg_values: Result<Vec<_>, _> = ctor_args.iter().map(|e| self.evaluate_expr(e)).collect();
+                    let arg_values = arg_values?;
+                    return crate::builtins::text_fns::stringbuilder_new_fn(&arg_values);
                 }
 
                 if class_name.starts_with("system.windows.forms.")
@@ -4494,6 +4534,12 @@ impl Interpreter {
                             let elapsed = obj_ref.borrow().fields.get("elapsedmilliseconds").cloned().unwrap_or(Value::Long(0));
                             return Ok(Value::String(format!("{}ms", elapsed.as_string())));
                         }
+                        if tn == "StringBuilder" {
+                            let arg_values: Vec<Value> = args.iter()
+                                .map(|arg| self.evaluate_expr(arg))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            return stringbuilder_method_fn("tostring", &obj_val, &arg_values);
+                        }
                     }
                     return Ok(Value::String(obj_val.as_string()));
                 }
@@ -4539,6 +4585,18 @@ impl Interpreter {
                     return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(type_obj))));
                 }
                 "equals" => {
+                    // Delegate to StringBuilder-specific Equals
+                    if let Value::Object(obj_ref) = &obj_val {
+                        let tn = obj_ref.borrow().fields.get("__type").and_then(|v| {
+                            if let Value::String(s) = v { Some(s.clone()) } else { None }
+                        }).unwrap_or_default();
+                        if tn == "StringBuilder" {
+                            let arg_values: Vec<Value> = args.iter()
+                                .map(|arg| self.evaluate_expr(arg))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            return stringbuilder_method_fn("equals", &obj_val, &arg_values);
+                        }
+                    }
                     let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
                         .map(|arg| self.evaluate_expr(arg))
                         .collect();
@@ -4742,6 +4800,220 @@ impl Interpreter {
                 }
             }
 
+            // ===== .NET String instance methods =====
+            if let Value::String(ref s_val) = obj_val {
+                let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                    .map(|arg| self.evaluate_expr(arg))
+                    .collect();
+                let arg_values = arg_values?;
+                match method_name.as_str() {
+                    "tolower" | "tolowerinvariant" => return Ok(Value::String(s_val.to_lowercase())),
+                    "toupper" | "toupperinvariant" => return Ok(Value::String(s_val.to_uppercase())),
+                    "trim" => {
+                        if let Some(chars_arg) = arg_values.get(0) {
+                            let trim_chars: Vec<char> = chars_arg.as_string().chars().collect();
+                            return Ok(Value::String(s_val.trim_matches(|c| trim_chars.contains(&c)).to_string()));
+                        }
+                        return Ok(Value::String(s_val.trim().to_string()));
+                    }
+                    "trimstart" | "trimend" => {
+                        let trim_chars: Vec<char> = arg_values.get(0)
+                            .map(|v| v.as_string().chars().collect())
+                            .unwrap_or_else(|| vec![' ', '\t', '\n', '\r']);
+                        if method_name == "trimstart" {
+                            return Ok(Value::String(s_val.trim_start_matches(|c| trim_chars.contains(&c)).to_string()));
+                        } else {
+                            return Ok(Value::String(s_val.trim_end_matches(|c| trim_chars.contains(&c)).to_string()));
+                        }
+                    }
+                    "contains" => {
+                        let needle = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                        return Ok(Value::Boolean(s_val.contains(&needle)));
+                    }
+                    "startswith" => {
+                        let prefix = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                        // Check for StringComparison.OrdinalIgnoreCase (=5)
+                        let ignore_case = arg_values.get(1).and_then(|v| v.as_integer().ok()).map(|i| i == 5).unwrap_or(false);
+                        if ignore_case {
+                            return Ok(Value::Boolean(s_val.to_lowercase().starts_with(&prefix.to_lowercase())));
+                        }
+                        return Ok(Value::Boolean(s_val.starts_with(&prefix)));
+                    }
+                    "endswith" => {
+                        let suffix = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                        let ignore_case = arg_values.get(1).and_then(|v| v.as_integer().ok()).map(|i| i == 5).unwrap_or(false);
+                        if ignore_case {
+                            return Ok(Value::Boolean(s_val.to_lowercase().ends_with(&suffix.to_lowercase())));
+                        }
+                        return Ok(Value::Boolean(s_val.ends_with(&suffix)));
+                    }
+                    "indexof" => {
+                        let needle = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                        let start = arg_values.get(1).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                        let hay = if start > 0 && start < s_val.len() { &s_val[start..] } else { s_val.as_str() };
+                        match hay.find(&needle) {
+                            Some(pos) => return Ok(Value::Integer((pos + start) as i32)),
+                            None => return Ok(Value::Integer(-1)),
+                        }
+                    }
+                    "lastindexof" => {
+                        let needle = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                        match s_val.rfind(&needle) {
+                            Some(pos) => return Ok(Value::Integer(pos as i32)),
+                            None => return Ok(Value::Integer(-1)),
+                        }
+                    }
+                    "substring" => {
+                        let start = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                        let len = arg_values.get(1).and_then(|v| v.as_integer().ok());
+                        let chars: Vec<char> = s_val.chars().collect();
+                        if start >= chars.len() {
+                            return Ok(Value::String(String::new()));
+                        }
+                        let result: String = if let Some(l) = len {
+                            chars[start..std::cmp::min(start + l as usize, chars.len())].iter().collect()
+                        } else {
+                            chars[start..].iter().collect()
+                        };
+                        return Ok(Value::String(result));
+                    }
+                    "replace" => {
+                        let old = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                        let new = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                        return Ok(Value::String(s_val.replace(&old, &new)));
+                    }
+                    "remove" => {
+                        let start = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                        let count = arg_values.get(1).and_then(|v| v.as_integer().ok());
+                        let chars: Vec<char> = s_val.chars().collect();
+                        let result: String = if let Some(c) = count {
+                            let c = c as usize;
+                            chars[..start].iter().chain(chars[std::cmp::min(start + c, chars.len())..].iter()).collect()
+                        } else {
+                            chars[..start].iter().collect()
+                        };
+                        return Ok(Value::String(result));
+                    }
+                    "insert" => {
+                        let idx = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                        let ins = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                        let mut result = s_val.clone();
+                        if idx <= result.len() {
+                            result.insert_str(idx, &ins);
+                        }
+                        return Ok(Value::String(result));
+                    }
+                    "split" => {
+                        // .Split(Char) / .Split(String()) / .Split({delims}, StringSplitOptions)
+                        let delim = arg_values.get(0).cloned().unwrap_or(Value::String(" ".to_string()));
+                        // Check for StringSplitOptions (second arg): 0=None, 1=RemoveEmptyEntries
+                        let remove_empty = arg_values.get(1).and_then(|v| v.as_integer().ok()).unwrap_or(0) == 1;
+                        let parts: Vec<&str> = match &delim {
+                            Value::Array(arr) => {
+                                // Array of string delimiters
+                                let delims: Vec<String> = arr.iter().map(|v| v.as_string()).collect();
+                                if delims.len() == 1 {
+                                    s_val.split(&delims[0]).collect()
+                                } else {
+                                    // Multi-delimiter split: use first as primary, then split results by others
+                                    // For multi-string delimiters, we need owned strings
+                                    let mut owned_parts: Vec<String> = vec![s_val.clone()];
+                                    for d in &delims {
+                                        let mut new_parts = Vec::new();
+                                        for part in &owned_parts {
+                                            for sub in part.split(d.as_str()) {
+                                                new_parts.push(sub.to_string());
+                                            }
+                                        }
+                                        owned_parts = new_parts;
+                                    }
+                                    let result_vals: Vec<Value> = owned_parts.into_iter()
+                                        .filter(|s| !remove_empty || !s.is_empty())
+                                        .map(|s| Value::String(s))
+                                        .collect();
+                                    return Ok(Value::Array(result_vals));
+                                }
+                            }
+                            Value::Char(c) => s_val.split(*c).collect(),
+                            _ => {
+                                let d = delim.as_string();
+                                if d.len() == 1 {
+                                    s_val.split(d.chars().next().unwrap()).collect()
+                                } else {
+                                    s_val.split(&d).collect()
+                                }
+                            }
+                        };
+                        let result: Vec<Value> = parts.into_iter()
+                            .filter(|s| !remove_empty || !s.is_empty())
+                            .map(|s| Value::String(s.to_string()))
+                            .collect();
+                        return Ok(Value::Array(result));
+                    }
+                    "padleft" => {
+                        let total_width = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                        let pad_char = arg_values.get(1).map(|v| {
+                            let s = v.as_string();
+                            s.chars().next().unwrap_or(' ')
+                        }).unwrap_or(' ');
+                        if s_val.len() >= total_width {
+                            return Ok(Value::String(s_val.clone()));
+                        }
+                        let padding: String = std::iter::repeat(pad_char).take(total_width - s_val.len()).collect();
+                        return Ok(Value::String(format!("{}{}", padding, s_val)));
+                    }
+                    "padright" => {
+                        let total_width = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                        let pad_char = arg_values.get(1).map(|v| {
+                            let s = v.as_string();
+                            s.chars().next().unwrap_or(' ')
+                        }).unwrap_or(' ');
+                        if s_val.len() >= total_width {
+                            return Ok(Value::String(s_val.clone()));
+                        }
+                        let padding: String = std::iter::repeat(pad_char).take(total_width - s_val.len()).collect();
+                        return Ok(Value::String(format!("{}{}", s_val, padding)));
+                    }
+                    "chars" => {
+                        // .Chars(index) — returns character at index
+                        let idx = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                        let c = s_val.chars().nth(idx).unwrap_or('\0');
+                        return Ok(Value::Char(c));
+                    }
+                    "tochararray" => {
+                        let arr: Vec<Value> = s_val.chars().map(|c| Value::Char(c)).collect();
+                        return Ok(Value::Array(arr));
+                    }
+                    "isnullorempty" => {
+                        return Ok(Value::Boolean(s_val.is_empty()));
+                    }
+                    "tostring" => {
+                        return Ok(Value::String(s_val.clone()));
+                    }
+                    _ => {} // Fall through to other dispatch
+                }
+            }
+
+            // ===== Array instance methods =====
+            if let Value::Array(ref arr_val) = obj_val {
+                let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                    .map(|arg| self.evaluate_expr(arg))
+                    .collect();
+                let arg_values = arg_values?;
+                match method_name.as_str() {
+                    "contains" => {
+                        let needle = arg_values.get(0).cloned().unwrap_or(Value::Nothing);
+                        let found = arr_val.iter().any(|v| v.as_string() == needle.as_string());
+                        return Ok(Value::Boolean(found));
+                    }
+                    "tostring" => {
+                        let joined = arr_val.iter().map(|v| v.as_string()).collect::<Vec<_>>().join(", ");
+                        return Ok(Value::String(format!("[{}]", joined)));
+                    }
+                    _ => {} // Fall through
+                }
+            }
+
             // Handle StringBuilder methods
             if let Value::Object(obj_ref) = &obj_val {
                 let type_name = obj_ref.borrow().fields.get("__type").and_then(|v| {
@@ -4749,6 +5021,20 @@ impl Interpreter {
                 }).unwrap_or_default();
                 if !type_name.is_empty() {
                     if type_name == "StringBuilder" {
+                        // Special handling for CopyTo: write back the modified array to the destination variable
+                        if method_name == "copyto" && args.len() >= 4 {
+                            let arg_values: Vec<Value> = args.iter()
+                                .map(|arg| self.evaluate_expr(arg))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let result = stringbuilder_method_fn(&method_name, &obj_val, &arg_values)?;
+                            // Write the result array back to the destination variable
+                            if let Value::Array(_) = &result {
+                                if let Expression::Variable(dest_id) = &args[1] {
+                                    self.env.set(dest_id.as_str(), result.clone())?;
+                                }
+                            }
+                            return Ok(result);
+                        }
                         let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
                             .map(|arg| self.evaluate_expr(arg))
                             .collect();
@@ -5297,9 +5583,20 @@ impl Interpreter {
                             }
                             "replace" => {
                                 let input = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
-                                let replacement = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
-                                let args_for_fn = vec![Value::String(input), Value::String(full_pattern), Value::String(replacement)];
-                                return crate::builtins::text_fns::regex_replace_fn(&args_for_fn);
+                                if arg_values.len() >= 3 {
+                                    // Static-style: regex.Replace(input, pattern, replacement[, options])
+                                    let pat = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                                    let replacement = arg_values.get(2).map(|v| v.as_string()).unwrap_or_default();
+                                    let opts = arg_values.get(3).and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let effective = if opts & 1 != 0 { format!("(?i){}", pat) } else { pat };
+                                    let args_for_fn = vec![Value::String(input), Value::String(effective), Value::String(replacement)];
+                                    return crate::builtins::text_fns::regex_replace_fn(&args_for_fn);
+                                } else {
+                                    // Instance: regex.Replace(input, replacement)
+                                    let replacement = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                                    let args_for_fn = vec![Value::String(input), Value::String(full_pattern), Value::String(replacement)];
+                                    return crate::builtins::text_fns::regex_replace_fn(&args_for_fn);
+                                }
                             }
                             "split" => {
                                 let input = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();

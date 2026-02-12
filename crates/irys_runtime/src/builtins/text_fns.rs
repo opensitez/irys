@@ -71,7 +71,11 @@ impl StringBuilder {
 pub fn stringbuilder_new_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     let sb = if args.is_empty() {
         StringBuilder::new()
+    } else if let Ok(cap) = args[0].as_integer() {
+        // New StringBuilder(capacity) — integer argument = capacity
+        StringBuilder::with_capacity(cap as usize)
     } else {
+        // New StringBuilder(initialValue) — string argument = initial content
         let initial = args[0].as_string();
         let mut sb = StringBuilder::new();
         sb.append(&initial);
@@ -81,7 +85,10 @@ pub fn stringbuilder_new_fn(args: &[Value]) -> Result<Value, RuntimeError> {
     use crate::value::ObjectData;
     let mut fields = std::collections::HashMap::new();
     fields.insert("__type".to_string(), Value::String("StringBuilder".to_string()));
-    fields.insert("__data".to_string(), Value::String(sb.buffer));
+    fields.insert("__data".to_string(), Value::String(sb.buffer.clone()));
+    fields.insert("length".to_string(), Value::Integer(sb.buffer.len() as i32));
+    fields.insert("capacity".to_string(), Value::Integer(sb.buffer.capacity() as i32));
+    fields.insert("maxcapacity".to_string(), Value::Integer(i32::MAX));
     
     Ok(Value::Object(Rc::new(RefCell::new(ObjectData {
         class_name: "StringBuilder".to_string(),
@@ -101,19 +108,43 @@ pub fn stringbuilder_method_fn(method: &str, obj: &Value, args: &[Value]) -> Res
         
         let mut sb = StringBuilder { buffer };
         
+        // Helper: sync length/capacity properties and return Self for chaining
+        let return_self = |obj_data: &mut std::cell::RefMut<crate::value::ObjectData>, buffer: String| -> Result<Value, RuntimeError> {
+            let len = buffer.len() as i32;
+            let cap = buffer.capacity() as i32;
+            obj_data.fields.insert("__data".to_string(), Value::String(buffer));
+            obj_data.fields.insert("length".to_string(), Value::Integer(len));
+            obj_data.fields.insert("capacity".to_string(), Value::Integer(cap));
+            Ok(obj.clone())
+        };
+
         match method.to_lowercase().as_str() {
             "append" => {
                 if !args.is_empty() {
                     sb.append(&args[0].as_string());
                 }
-                obj_data.fields.insert("__data".to_string(), Value::String(sb.buffer));
-                Ok(Value::Nothing)
+                return_self(&mut obj_data, sb.buffer)
             }
             "appendline" => {
-                let text = if args.is_empty() { "" } else { &args[0].as_string() };
-                sb.append_line(text);
-                obj_data.fields.insert("__data".to_string(), Value::String(sb.buffer));
-                Ok(Value::Nothing)
+                if args.is_empty() {
+                    sb.buffer.push('\n');
+                } else {
+                    sb.append_line(&args[0].as_string());
+                }
+                return_self(&mut obj_data, sb.buffer)
+            }
+            "appendformat" => {
+                // AppendFormat(format, args...) — simplified: just concatenate
+                if !args.is_empty() {
+                    let fmt = args[0].as_string();
+                    // Simple {0}, {1}, ... substitution
+                    let mut result = fmt.clone();
+                    for (i, arg) in args[1..].iter().enumerate() {
+                        result = result.replace(&format!("{{{}}}", i), &arg.as_string());
+                    }
+                    sb.append(&result);
+                }
+                return_self(&mut obj_data, sb.buffer)
             }
             "insert" => {
                 if args.len() >= 2 {
@@ -121,8 +152,7 @@ pub fn stringbuilder_method_fn(method: &str, obj: &Value, args: &[Value]) -> Res
                     let value = args[1].as_string();
                     sb.insert(index, &value);
                 }
-                obj_data.fields.insert("__data".to_string(), Value::String(sb.buffer));
-                Ok(Value::Nothing)
+                return_self(&mut obj_data, sb.buffer)
             }
             "remove" => {
                 if args.len() >= 2 {
@@ -130,22 +160,19 @@ pub fn stringbuilder_method_fn(method: &str, obj: &Value, args: &[Value]) -> Res
                     let length = args[1].as_integer()? as usize;
                     sb.remove(start, length);
                 }
-                obj_data.fields.insert("__data".to_string(), Value::String(sb.buffer));
-                Ok(Value::Nothing)
+                return_self(&mut obj_data, sb.buffer)
             }
             "replace" => {
                 if args.len() >= 2 {
                     let old = args[0].as_string();
-                    let new = args[1].as_string();
-                    sb.replace(&old, &new);
+                    let new_val = args[1].as_string();
+                    sb.replace(&old, &new_val);
                 }
-                obj_data.fields.insert("__data".to_string(), Value::String(sb.buffer));
-                Ok(Value::Nothing)
+                return_self(&mut obj_data, sb.buffer)
             }
             "clear" => {
                 sb.clear();
-                obj_data.fields.insert("__data".to_string(), Value::String(sb.buffer));
-                Ok(Value::Nothing)
+                return_self(&mut obj_data, sb.buffer)
             }
             "tostring" => {
                 Ok(Value::String(sb.to_string()))
@@ -155,6 +182,45 @@ pub fn stringbuilder_method_fn(method: &str, obj: &Value, args: &[Value]) -> Res
             }
             "capacity" => {
                 Ok(Value::Integer(sb.capacity() as i32))
+            }
+            "ensurecapacity" => {
+                let cap = args.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                sb.buffer.reserve(cap.saturating_sub(sb.buffer.capacity()));
+                return_self(&mut obj_data, sb.buffer)
+            }
+            "chars" => {
+                let idx = args.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
+                let c = sb.buffer.chars().nth(idx).unwrap_or('\0');
+                Ok(Value::Char(c))
+            }
+            "copyto" => {
+                // CopyTo(sourceIndex, destination As Char(), destinationIndex, count)
+                if args.len() >= 4 {
+                    let source_index = args[0].as_integer()? as usize;
+                    let dest_index = args[2].as_integer()? as usize;
+                    let count = args[3].as_integer()? as usize;
+                    let chars: Vec<char> = sb.buffer.chars().collect();
+                    if let Value::Array(ref dest_arr) = args[1] {
+                        let mut new_arr = dest_arr.clone();
+                        for i in 0..count {
+                            if source_index + i < chars.len() && dest_index + i < new_arr.len() {
+                                new_arr[dest_index + i] = Value::Char(chars[source_index + i]);
+                            }
+                        }
+                        return Ok(Value::Array(new_arr));
+                    }
+                }
+                Ok(Value::Nothing)
+            }
+            "equals" => {
+                if let Some(Value::Object(other_rc)) = args.get(0) {
+                    let other_buf = other_rc.borrow().fields.get("__data")
+                        .and_then(|v| if let Value::String(s) = v { Some(s.clone()) } else { None })
+                        .unwrap_or_default();
+                    Ok(Value::Boolean(sb.buffer == other_buf))
+                } else {
+                    Ok(Value::Boolean(false))
+                }
             }
             _ => Err(RuntimeError::Custom(format!("Unknown StringBuilder method: {}", method)))
         }

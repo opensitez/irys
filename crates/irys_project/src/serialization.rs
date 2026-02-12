@@ -551,6 +551,39 @@ pub fn load_project_vbproj(path: impl AsRef<Path>) -> SaveResult<Project> {
 
     let parent_dir = path.parent().unwrap_or(Path::new("."));
 
+    // SDK-style projects have no <Compile> items — auto-discover all .vb files
+    if form_paths.is_empty() && module_paths.is_empty() {
+        eprintln!("[DEBUG] No <Compile> items found — SDK-style project, auto-discovering .vb files");
+        if let Ok(entries) = fs::read_dir(parent_dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if let Some(ext) = p.extension() {
+                    if ext.eq_ignore_ascii_case("vb") {
+                        let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        // Skip designer files
+                        if fname.to_lowercase().ends_with(".designer.vb") {
+                            continue;
+                        }
+                        // Check if it's a form file (contains "Inherits System.Windows.Forms.Form")
+                        if let Ok(content) = fs::read_to_string(&p) {
+                            let upper = content.to_uppercase();
+                            if upper.contains("INHERITS SYSTEM.WINDOWS.FORMS.FORM")
+                                || upper.contains("INHERITS FORM")
+                            {
+                                form_paths.push(fname);
+                            } else {
+                                module_paths.push(fname);
+                            }
+                        } else {
+                            module_paths.push(fname);
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("[DEBUG] Auto-discovered form_paths={:?}, module_paths={:?}", form_paths, module_paths);
+    }
+
     eprintln!("[DEBUG] load_project_vbproj: project='{}', form_paths={:?}, module_paths={:?}", project_name, form_paths, module_paths);
 
     // Load Forms
