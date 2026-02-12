@@ -232,9 +232,11 @@ fn parse_sub_decl(pair: Pair<Rule>) -> ParseResult<SubDecl> {
     let mut body = Vec::new();
     let mut handles: Option<Vec<String>> = None;
     let mut is_async = false;
+    let mut is_extension = false;
 
     for p in inner {
         match p.as_rule() {
+            Rule::extension_attribute => is_extension = true,
             Rule::visibility_modifier => {
                 let s = p.as_str().to_lowercase();
                 match s.as_str() {
@@ -299,6 +301,7 @@ fn parse_sub_decl(pair: Pair<Rule>) -> ParseResult<SubDecl> {
         body,
         handles,
         is_async,
+        is_extension,
     })
 }
 
@@ -310,9 +313,11 @@ fn parse_function_decl(pair: Pair<Rule>) -> ParseResult<FunctionDecl> {
     let mut return_type = None;
     let mut body = Vec::new();
     let mut is_async = false;
+    let mut is_extension = false;
 
     for p in inner {
         match p.as_rule() {
+            Rule::extension_attribute => is_extension = true,
             Rule::visibility_modifier => {
                 let s = p.as_str().to_lowercase();
                 match s.as_str() {
@@ -366,6 +371,7 @@ fn parse_function_decl(pair: Pair<Rule>) -> ParseResult<FunctionDecl> {
         return_type,
         body,
         is_async,
+        is_extension,
     })
 }
 

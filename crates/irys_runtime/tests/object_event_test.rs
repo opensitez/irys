@@ -21,8 +21,8 @@ fn test_object_event_handling() {
     let prog = parse_program(code).expect("Failed to parse");
     interp.load_module("MyForm", &prog).expect("Failed to load");
 
-    // confirm class exists
-    assert!(interp.classes.contains_key("myform"));
+    // confirm class exists (module-qualified key: module.class)
+    assert!(interp.classes.contains_key("myform.myform"));
 
     // 1. Instantiate
     // We can't use "Dim" inside eval_expr. We need to run a statement.

@@ -1,6 +1,7 @@
 
 use irys_parser::parser::parse_program;
 // use irys_parser::ast::*;
+use irys_parser::ast::Declaration;
 
 // Test for single argument implicit call
 #[test]
@@ -200,4 +201,67 @@ fn test_nullable_type_param() {
     "#;
     let result = parse_program(code);
     assert!(result.is_ok(), "Failed to parse nullable type param: {:?}", result.err());
+}
+
+// ===== Extension method tests =====
+
+#[test]
+fn test_extension_function_attribute() {
+    let code = r#"
+        <Extension()>
+        Function Reverse(s As String) As String
+            Return StrReverse(s)
+        End Function
+    "#;
+    let prog = parse_program(code).expect("Failed to parse extension function");
+    let func = prog.declarations.iter().find_map(|d| {
+        if let Declaration::Function(f) = d { Some(f) } else { None }
+    }).expect("No function declaration found");
+    assert!(func.is_extension, "Function should be marked as extension");
+    assert_eq!(func.name.as_str(), "Reverse");
+}
+
+#[test]
+fn test_extension_sub_attribute() {
+    let code = r#"
+        <Extension()>
+        Sub PrintUpper(s As String)
+            Console.WriteLine(s.ToUpper())
+        End Sub
+    "#;
+    let prog = parse_program(code).expect("Failed to parse extension sub");
+    let sub_decl = prog.declarations.iter().find_map(|d| {
+        if let Declaration::Sub(s) = d { Some(s) } else { None }
+    }).expect("No sub declaration found");
+    assert!(sub_decl.is_extension, "Sub should be marked as extension");
+    assert_eq!(sub_decl.name.as_str(), "PrintUpper");
+}
+
+#[test]
+fn test_extension_qualified_attribute() {
+    let code = r#"
+        <Runtime.CompilerServices.Extension()>
+        Function IsNullOrEmpty(s As String) As Boolean
+            Return s Is Nothing OrElse s = ""
+        End Function
+    "#;
+    let prog = parse_program(code).expect("Failed to parse qualified extension attribute");
+    let func = prog.declarations.iter().find_map(|d| {
+        if let Declaration::Function(f) = d { Some(f) } else { None }
+    }).expect("No function declaration found");
+    assert!(func.is_extension, "Function with qualified attribute should be marked as extension");
+}
+
+#[test]
+fn test_non_extension_function() {
+    let code = r#"
+        Function NormalFunc(x As Integer) As Integer
+            Return x + 1
+        End Function
+    "#;
+    let prog = parse_program(code).expect("Failed to parse normal function");
+    let func = prog.declarations.iter().find_map(|d| {
+        if let Declaration::Function(f) = d { Some(f) } else { None }
+    }).expect("No function declaration found");
+    assert!(!func.is_extension, "Normal function should NOT be marked as extension");
 }

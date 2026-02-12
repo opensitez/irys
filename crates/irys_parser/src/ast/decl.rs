@@ -36,6 +36,8 @@ pub struct SubDecl {
     pub handles: Option<Vec<String>>,
     #[serde(default)]
     pub is_async: bool,
+    #[serde(default)]
+    pub is_extension: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +49,8 @@ pub struct FunctionDecl {
     pub body: Vec<Statement>,
     #[serde(default)]
     pub is_async: bool,
+    #[serde(default)]
+    pub is_extension: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

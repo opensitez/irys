@@ -777,12 +777,38 @@ impl Interpreter {
         }
     }
 
+    /// Resolve a class name to the key actually stored in `self.classes`.
+    ///
+    /// Tries, in order:
+    ///   1. exact match (already lowercased)
+    ///   2. current-module-qualified  (`module.classname`)
+    ///   3. any key whose last segment matches (`*.classname`)
+    fn resolve_class_key(&self, class_name: &str) -> Option<String> {
+        let lower = class_name.to_lowercase();
+        if self.classes.contains_key(&lower) {
+            return Some(lower);
+        }
+        // Try module-qualified
+        if let Some(module) = &self.current_module {
+            let qualified = format!("{}.{}", module.to_lowercase(), lower);
+            if self.classes.contains_key(&qualified) {
+                return Some(qualified);
+            }
+        }
+        // Fallback: search for any key ending with `.classname`
+        let suffix = format!(".{}", lower);
+        self.classes.keys()
+            .find(|k| k.ends_with(&suffix))
+            .cloned()
+    }
+
     // Helper to collect all fields including inherited ones
     fn collect_fields(&mut self, class_name: &str) -> HashMap<String, Value> {
         let mut fields = HashMap::new();
         
+        let resolved = self.resolve_class_key(class_name);
         // 1. Get base class fields first (if any)
-        if let Some(cls) = self.classes.get(&class_name.to_lowercase()).cloned() {
+        if let Some(cls) = resolved.and_then(|k| self.classes.get(&k).cloned()) {
              if let Some(parent_type) = &cls.inherits {
                  // Resolve parent type to string
                  // VBType::Custom(name) usually
@@ -883,7 +909,7 @@ impl Interpreter {
 
     // Helper to find a method in class hierarchy
     fn find_method(&self, class_name: &str, method_name: &str) -> Option<irys_parser::ast::decl::MethodDecl> {
-        let key = class_name.to_lowercase();
+        let key = self.resolve_class_key(class_name)?;
         if let Some(cls) = self.classes.get(&key) {
             // Check current class
             for method in &cls.methods {
@@ -912,7 +938,7 @@ impl Interpreter {
 
     // Helper to find a property in class hierarchy
     fn find_property(&self, class_name: &str, prop_name: &str) -> Option<irys_parser::ast::decl::PropertyDecl> {
-        let key = class_name.to_lowercase();
+        let key = self.resolve_class_key(class_name).unwrap_or_else(|| class_name.to_lowercase());
         if let Some(cls) = self.classes.get(&key) {
              // Check current class
             for prop in &cls.properties {
@@ -1012,6 +1038,7 @@ impl Interpreter {
                                             body: body.clone(),
                                             handles: None,
                                             is_async: false,
+                                            is_extension: false,
                                         };
                                         return match self.call_user_sub(&sub, &[val], Some(obj_ref.clone())) {
                                             Ok(_) => Ok(()),
@@ -1947,7 +1974,17 @@ impl Interpreter {
                 Ok(val)
             }
             Expression::MethodCall(obj, method, args) => {
-                self.call_method(obj, method, args)
+                match self.call_method(obj, method, args) {
+                    Ok(val) => Ok(val),
+                    Err(e) => {
+                        // Fallback: try extension methods
+                        if let Ok(result) = self.try_extension_method(obj, method, args) {
+                            Ok(result)
+                        } else {
+                            Err(e)
+                        }
+                    }
+                }
             }
             Expression::ArrayAccess(array, indices) => {
                 let arr = self.env.get(array.as_str())?;
@@ -3204,7 +3241,8 @@ impl Interpreter {
                     return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
                 }
 
-                if let Some(class_decl) = self.classes.get(&class_name).cloned() {
+                let resolved_key = self.resolve_class_key(&class_name);
+                if let Some(class_decl) = resolved_key.as_ref().and_then(|k| self.classes.get(k).cloned()) {
                     // Collect fields from hierarchy
                     let fields = self.collect_fields(&class_name);
 
@@ -4008,6 +4046,7 @@ impl Interpreter {
                                  return_type: prop.return_type.clone(),
                                  body: body.clone(),
                                  is_async: false,
+                                 is_extension: false,
                              };
                              
                              // Execute Property Get
@@ -4048,6 +4087,12 @@ impl Interpreter {
                     }
                     // For string proxy control properties not yet synced, return empty string
                     return Ok(Value::String(String::new()));
+                }
+
+                // Accessing a member on Nothing → return Nothing (VB would throw NullReferenceException,
+                // but we stay lenient so runtime keeps going).
+                if matches!(&obj_val, Value::Nothing) {
+                    return Ok(Value::Nothing);
                 }
                 
                 // Fallback to simpler evaluator for non-class objects or if not found
@@ -7884,6 +7929,7 @@ impl Interpreter {
                                   return_type: prop.return_type.clone(),
                                   body: body.clone(),
                                   is_async: false,
+                                  is_extension: false,
                               };
                               return self.call_user_function(&func, &[], Some(obj_ref.clone()));
                          }
@@ -7927,8 +7973,8 @@ impl Interpreter {
                 if let Ok(val) = self.env.get(&key) {
                     return Ok(val);
                 }
-                // Not found in env - return empty string as default for control properties
-                return Ok(Value::String(String::new()));
+                // Not a known control property — fall through to other dispatch
+                // (don't return empty string here, extension methods may handle it)
             }
             if let Value::Object(obj_ref) = obj_val {
                 let class_name_str = obj_ref.borrow().class_name.clone();
@@ -9222,6 +9268,42 @@ impl Interpreter {
             }
             _ => Err(RuntimeError::Custom(format!("Unknown method: {}", method_name))),
         }
+    }
+
+    /// Try to find and call an extension method for the given object and method name.
+    /// Extension methods are Subs/Functions marked with <Extension()> whose first parameter
+    /// receives the object instance.
+    fn try_extension_method(&mut self, obj: &Expression, method: &Identifier, args: &[Expression]) -> Result<Value, RuntimeError> {
+        let method_lower = method.as_str().to_lowercase();
+
+        // Evaluate the object (the "self" for the extension method)
+        let obj_val = self.evaluate_expr(obj)?;
+
+        // Evaluate the remaining arguments
+        let mut arg_vals: Vec<Value> = Vec::with_capacity(args.len() + 1);
+        arg_vals.push(obj_val); // First arg = the object
+        for arg in args {
+            arg_vals.push(self.evaluate_expr(arg)?);
+        }
+
+        // Search extension functions
+        for (_key, func) in &self.functions {
+            if func.is_extension && func.name.as_str().to_lowercase() == method_lower {
+                let func_clone = func.clone();
+                return self.call_user_function(&func_clone, &arg_vals, None);
+            }
+        }
+
+        // Search extension subs
+        for (_key, sub) in &self.subs {
+            if sub.is_extension && sub.name.as_str().to_lowercase() == method_lower {
+                let sub_clone = sub.clone();
+                self.call_user_sub(&sub_clone, &arg_vals, None)?;
+                return Ok(Value::Nothing);
+            }
+        }
+
+        Err(RuntimeError::Custom(format!("No extension method found: {}", method.as_str())))
     }
 
     // Generic helper for subs

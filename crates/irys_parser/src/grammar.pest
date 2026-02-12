@@ -11,7 +11,7 @@ line_continuation = _{ "_" ~ (" " | "\t")* ~ ("\r\n" | "\n" | "\r") }
 
 // Program structure
 program = { SOI ~ line* ~ EOI }
-line = _{ imports_statement | attribute_line | statement_line | NEWLINE | COMMENT }
+line = _{ imports_statement | statement_line | attribute_line | NEWLINE | COMMENT }
 statement_line = {
     (
         (sub_decl | function_decl)
@@ -19,9 +19,10 @@ statement_line = {
     ) ~ (NEWLINE | EOI)
 }
 
-// Attributes: <...> _ (skipped, consumed but ignored)
+// Attributes: <Extension()> is captured; all other attributes are silently consumed
+extension_attribute = { "<" ~ (^"Runtime.CompilerServices.")? ~ ^"Extension" ~ "(" ~ ")" ~ ">" ~ (WHITESPACE* ~ "_" ~ WHITESPACE* ~ (NEWLINE | EOI))? }
 attribute = _{ "<" ~ (!(">" ~ WHITESPACE* ~ ("_" ~ WHITESPACE* ~ (NEWLINE | EOI))?) ~ ANY)* ~ ">" ~ (WHITESPACE* ~ "_" ~ WHITESPACE* ~ (NEWLINE | EOI))? }
-attribute_line = _{ attribute ~ (NEWLINE | EOI)? }
+attribute_line = _{ (extension_attribute ~ (NEWLINE | EOI)?) | (attribute ~ (NEWLINE | EOI)?) }
 
 // Imports statement (skipped)
 imports_statement = _{ ^"Imports" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI) }

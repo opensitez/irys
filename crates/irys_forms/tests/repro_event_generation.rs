@@ -4,11 +4,10 @@ use irys_forms::EventType;
 fn test_event_signature_generation() {
     let evt = EventType::Click;
     let params = evt.parameters();
-    assert_eq!(params, ""); // Click has no params usually, or maybe arguments?
-    // Wait, my EventType definition might have params for Click?
-    // Let's check the code I read earlier.
+    // All events use "sender As Object, e As EventArgs" as base signature
+    assert_eq!(params, "sender As Object, e As EventArgs");
     
     let evt_mouse = EventType::MouseDown;
     let params_mouse = evt_mouse.parameters();
-    assert!(params_mouse.contains("Button As Integer"));
+    assert!(params_mouse.contains("MouseEventArgs"));
 }
