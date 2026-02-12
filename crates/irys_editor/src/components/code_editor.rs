@@ -29,9 +29,9 @@ pub fn CodeEditor() -> Element {
         }
     });
 
-    // Get absolute path to assets
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let assets_path = cwd.join("assets").to_string_lossy().to_string();
+    // Monaco assets are embedded in the binary and served via use_asset_handler.
+    // Requests to /assets/vs/... are intercepted and served from embedded data.
+    let assets_path = "assets";
 
     // JS script for Monaco initialization
     let monaco_script = format!(r#"
@@ -47,7 +47,7 @@ pub fn CodeEditor() -> Element {
                 let script = document.createElement('script');
                 script.src = src;
                 script.onload = () => resolve();
-                script.onerror = (e) => reject(e);
+                script.onerror = (e) => reject(new Error("Script load failed: " + src));
                 document.head.appendChild(script);
             }});
         }}
@@ -127,7 +127,7 @@ pub fn CodeEditor() -> Element {
             }} catch (e) {{
                 console.error("Failed to load Monaco:", e);
                 const el = document.getElementById('monaco-container');
-                if(el) el.innerText = "Failed to load Editor: " + e;
+                if(el) el.innerText = "Failed to load Editor: " + (e.message || e);
             }}
         }})();
     "#, assets_path);

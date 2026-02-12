@@ -740,6 +740,105 @@ impl AppState {
         }
     }
 
+    /// Add an existing form file (.frm or .vb) from disk into the project.
+    /// For .frm files, parses the VB6 classic form format.
+    /// For .vb files, looks for a matching .Designer.vb and loads as VB.NET WinForms.
+    pub fn add_existing_form(&self) {
+        let picked = FileDialog::new()
+            .set_title("Add Existing Form")
+            .add_filter("Form Files", &["frm", "vb"])
+            .add_filter("Classic Forms (.frm)", &["frm"])
+            .add_filter("VB.NET Forms (.vb)", &["vb"])
+            .pick_files();
+
+        if let Some(paths) = picked {
+            for path in paths {
+                let ext = path.extension()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase();
+
+                let result = match ext.as_str() {
+                    "frm" => irys_project::load_form_frm(&path),
+                    "vb" => irys_project::load_form_vb(&path),
+                    _ => continue,
+                };
+
+                match result {
+                    Ok(form_module) => {
+                        let name = form_module.form.name.clone();
+                        let mut project_signal = self.project;
+                        let mut project_write = project_signal.write();
+                        if let Some(proj) = project_write.as_mut() {
+                            // Avoid duplicate names
+                            if proj.get_form(&name).is_some() {
+                                eprintln!("[WARN] Form '{}' already exists in project, skipping", name);
+                                continue;
+                            }
+                            proj.forms.push(form_module);
+
+                            // Switch to imported form
+                            drop(project_write);
+                            let mut form_signal = self.current_form;
+                            *form_signal.write() = Some(name);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[ERROR] Failed to load form from {:?}: {}", path, e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Add an existing code file (.vb or .bas) from disk into the project.
+    pub fn add_existing_code_file(&self) {
+        let picked = FileDialog::new()
+            .set_title("Add Existing Code File")
+            .add_filter("Code Files", &["vb", "bas"])
+            .add_filter("VB.NET Files (.vb)", &["vb"])
+            .add_filter("Basic Modules (.bas)", &["bas"])
+            .pick_files();
+
+        if let Some(paths) = picked {
+            for path in paths {
+                let file_name = path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+
+                let code = match std::fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        eprintln!("[ERROR] Failed to read code file {:?}: {}", path, e);
+                        continue;
+                    }
+                };
+
+                let mut project_signal = self.project;
+                let mut project_write = project_signal.write();
+                if let Some(proj) = project_write.as_mut() {
+                    // Avoid duplicate names
+                    if proj.get_code_file(&file_name).is_some() {
+                        eprintln!("[WARN] Code file '{}' already exists in project, skipping", file_name);
+                        continue;
+                    }
+
+                    let mut code_file = irys_project::CodeFile::new(&file_name);
+                    code_file.code = code;
+                    proj.add_code_file(code_file);
+
+                    // Switch to imported code file
+                    drop(project_write);
+                    let mut form_signal = self.current_form;
+                    *form_signal.write() = Some(file_name);
+                    let mut code_editor_signal = self.show_code_editor;
+                    *code_editor_signal.write() = true;
+                }
+            }
+        }
+    }
+
     pub fn delete_selected_control(&self) {
         let sel = self.selected_controls.read().clone();
         if sel.is_empty() { return; }

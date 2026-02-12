@@ -1,9 +1,14 @@
 use dioxus::prelude::*;
 use irys_project::Project;
 use irys_forms::Form;
-use dioxus::desktop::{Config, WindowBuilder};
+use dioxus::desktop::{Config, WindowBuilder, use_asset_handler};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use include_dir::{include_dir, Dir};
+use wry::http::Response;
+
+/// Monaco editor and other assets embedded at compile time.
+static EMBEDDED_ASSETS: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../assets");
 
 mod app_state;
 mod components;
@@ -19,10 +24,7 @@ fn main() {
     let cli_path = std::env::args().nth(1).map(PathBuf::from);
     CLI_PROJECT_PATH.set(cli_path).ok();
 
-    // Configure to serve assets from CWD
-    // We set resource directory to CWD so 'assets/vs/...' resolves correctly
     let config = Config::new()
-        .with_resource_directory(PathBuf::from("."))
         .with_window(
             WindowBuilder::new()
                 .with_title("Irys Basic IDE")
@@ -36,6 +38,41 @@ fn main() {
 
 #[component]
 fn App() -> Element {
+    // Serve embedded Monaco assets from the binary.
+    // Requests to /assets/... are intercepted by this handler.
+    use_asset_handler("assets", move |request, responder| {
+        // The URI path looks like /assets/vs/loader.js — strip the leading /
+        let path = request.uri().path().trim_start_matches('/');
+        if let Some(file) = EMBEDDED_ASSETS.get_file(path.trim_start_matches("assets/")) {
+            let mime = match path.rsplit('.').next().unwrap_or("") {
+                "js" => "application/javascript",
+                "css" => "text/css",
+                "html" => "text/html",
+                "json" => "application/json",
+                "wasm" => "application/wasm",
+                "ttf" => "font/ttf",
+                "woff" | "woff2" => "font/woff2",
+                "svg" => "image/svg+xml",
+                "png" => "image/png",
+                _ => "application/octet-stream",
+            };
+            responder.respond(
+                Response::builder()
+                    .header("Content-Type", mime)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(file.contents().to_vec())
+                    .unwrap(),
+            );
+        } else {
+            responder.respond(
+                Response::builder()
+                    .status(404)
+                    .body(format!("Asset not found: {}", path).into_bytes())
+                    .unwrap(),
+            );
+        }
+    });
+
     // Initialize app state
     use_context_provider(|| {
         let mut state = AppState::new();

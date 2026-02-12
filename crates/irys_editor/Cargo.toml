@@ -22,3 +22,5 @@ uuid = { workspace = true }
 dioxus = { version = "0.7.3", features = ["desktop"] }
 serde_json = "1.0"
 rfd = "0.14"
+include_dir = "0.7"
+wry = "0.53.5"

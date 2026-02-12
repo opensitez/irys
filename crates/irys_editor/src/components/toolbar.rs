@@ -6,6 +6,7 @@ pub fn Toolbar() -> Element {
     let mut state = use_context::<AppState>();
     let run_mode = *state.run_mode.read();
     let mut show_add_dropdown = use_signal(|| false);
+    let mut show_add_existing_dropdown = use_signal(|| false);
 
     rsx! {
         div {
@@ -187,17 +188,18 @@ pub fn Toolbar() -> Element {
             
             div { style: "width: 1px; height: 20px; background: #ccc; margin: 0 4px;" }
             
-            // Add New dropdown button
+            // New Item dropdown button
             div {
                 style: "position: relative;",
                 button {
                     style: "padding: 4px 8px; font-size: 12px; cursor: pointer; border: 1px solid #999; background: white; border-radius: 3px; display: flex; align-items: center; gap: 4px;",
-                    title: "Add New Item",
+                    title: "New Item",
                     onclick: move |_| {
                         let current = *show_add_dropdown.read();
                         show_add_dropdown.set(!current);
+                        show_add_existing_dropdown.set(false);
                     },
-                    "➕ Add"
+                    "➕ New"
                     span { style: "font-size: 8px;", "▼" }
                 }
                 if *show_add_dropdown.read() {
@@ -249,6 +251,48 @@ pub fn Toolbar() -> Element {
                     div {
                         style: "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1000;",
                         onclick: move |_| show_add_dropdown.set(false)
+                    }
+                }
+            }
+
+            // Add Existing File button
+            div {
+                style: "position: relative;",
+                button {
+                    style: "padding: 4px 8px; font-size: 12px; cursor: pointer; border: 1px solid #999; background: white; border-radius: 3px; display: flex; align-items: center; gap: 4px;",
+                    title: "Add Existing File",
+                    onclick: move |_| {
+                        let current = *show_add_existing_dropdown.read();
+                        show_add_existing_dropdown.set(!current);
+                        show_add_dropdown.set(false);
+                    },
+                    "📂 Add"
+                    span { style: "font-size: 8px;", "▼" }
+                }
+                if *show_add_existing_dropdown.read() {
+                    div {
+                        style: "position: absolute; top: 100%; left: 0; background: white; border: 1px solid #ccc; box-shadow: 2px 2px 5px rgba(0,0,0,0.2); min-width: 180px; z-index: 1001; margin-top: 2px;",
+                        div {
+                            style: "padding: 6px 12px; cursor: pointer;",
+                            onclick: move |_| {
+                                state.add_existing_form();
+                                show_add_existing_dropdown.set(false);
+                            },
+                            "📋 Existing Form (.frm, .vb)"
+                        }
+                        div {
+                            style: "padding: 6px 12px; cursor: pointer;",
+                            onclick: move |_| {
+                                state.add_existing_code_file();
+                                show_add_existing_dropdown.set(false);
+                            },
+                            "\u{1F4C4} Existing Code (.vb, .bas)"
+                        }
+                    }
+                    // Overlay to close dropdown
+                    div {
+                        style: "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1000;",
+                        onclick: move |_| show_add_existing_dropdown.set(false)
                     }
                 }
             }
