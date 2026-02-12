@@ -123,24 +123,46 @@ pub fn PropertiesPanel() -> Element {
                                             let form_name = form.name.clone();
                                             let is_vbnet = state.is_current_form_vbnet();
                                             let events = match control.control_type {
-                                                irys_forms::ControlType::Button => vec!["Click", "DblClick", "MouseDown", "MouseUp", "MouseMove"],
-                                                irys_forms::ControlType::TextBox => vec!["Change", "KeyPress", "GotFocus", "LostFocus"],
-                                                irys_forms::ControlType::Label => vec!["Click", "DblClick"],
-                                                irys_forms::ControlType::CheckBox => vec!["Click"],
-                                                irys_forms::ControlType::RadioButton => vec!["Click"],
-                                                irys_forms::ControlType::ListBox => vec!["Click", "DblClick"],
-                                                irys_forms::ControlType::ComboBox => vec!["Click", "Change", "DropDown"],
-                                                irys_forms::ControlType::Frame => vec!["Click", "DblClick"],
-                                                irys_forms::ControlType::TreeView => vec!["Click", "DblClick"],
-                                                irys_forms::ControlType::DataGridView => vec!["Click", "CellClick", "SelectionChanged", "DataSourceChanged"],
-                                                irys_forms::ControlType::Panel => vec!["Click", "DblClick"],
-                                                irys_forms::ControlType::ListView => vec!["Click", "DblClick"],
+                                                irys_forms::ControlType::Button => vec!["Click", "MouseDown", "MouseUp", "MouseMove", "MouseEnter", "MouseLeave", "GotFocus", "LostFocus", "KeyDown", "KeyUp", "KeyPress", "EnabledChanged", "VisibleChanged", "Paint"],
+                                                irys_forms::ControlType::TextBox => vec!["TextChanged", "Change", "KeyPress", "KeyDown", "KeyUp", "GotFocus", "LostFocus", "Click", "MouseClick", "Enter", "Leave", "Validating", "Validated"],
+                                                irys_forms::ControlType::Label => vec!["Click", "DoubleClick", "MouseEnter", "MouseLeave"],
+                                                irys_forms::ControlType::CheckBox => vec!["CheckedChanged", "Click", "GotFocus", "LostFocus", "KeyPress", "EnabledChanged"],
+                                                irys_forms::ControlType::RadioButton => vec!["CheckedChanged", "Click", "GotFocus", "LostFocus", "KeyPress", "EnabledChanged"],
+                                                irys_forms::ControlType::ListBox => vec!["SelectedIndexChanged", "Click", "DoubleClick", "MouseClick", "GotFocus", "LostFocus", "KeyPress", "KeyDown"],
+                                                irys_forms::ControlType::ComboBox => vec!["SelectedIndexChanged", "SelectedValueChanged", "TextChanged", "DropDown", "DropDownClosed", "Click", "GotFocus", "LostFocus", "KeyPress", "KeyDown"],
+                                                irys_forms::ControlType::Frame => vec!["Click", "DoubleClick", "MouseEnter", "MouseLeave"],
+                                                irys_forms::ControlType::Panel => vec!["Click", "DoubleClick", "MouseDown", "MouseUp", "MouseMove", "MouseEnter", "MouseLeave", "Paint", "Scroll", "Resize"],
+                                                irys_forms::ControlType::PictureBox => vec!["Click", "DoubleClick", "MouseDown", "MouseUp", "MouseMove", "Paint"],
+                                                irys_forms::ControlType::RichTextBox => vec!["TextChanged", "KeyPress", "KeyDown", "KeyUp", "GotFocus", "LostFocus", "LinkClicked", "SelectionChanged"],
+                                                irys_forms::ControlType::TreeView => vec!["AfterSelect", "BeforeSelect", "AfterExpand", "AfterCollapse", "BeforeExpand", "BeforeCollapse", "NodeMouseClick", "NodeMouseDoubleClick", "AfterCheck", "BeforeCheck", "AfterLabelEdit", "BeforeLabelEdit", "ItemDrag", "Click", "DoubleClick", "KeyDown", "KeyPress"],
+                                                irys_forms::ControlType::ListView => vec!["SelectedIndexChanged", "ItemSelectionChanged", "ItemActivate", "ColumnClick", "ColumnWidthChanged", "ItemCheck", "Click", "DoubleClick", "MouseClick", "KeyDown", "KeyPress"],
+                                                irys_forms::ControlType::DataGridView => vec!["CellClick", "CellDoubleClick", "CellValueChanged", "CellContentClick", "CellEndEdit", "CellBeginEdit", "CellValidating", "CellEnter", "CellLeave", "CellFormatting", "SelectionChanged", "RowEnter", "RowLeave", "RowValidating", "RowValidated", "ColumnHeaderMouseClick", "CurrentCellChanged", "DataBindingComplete", "DataError", "Scroll", "KeyDown"],
+                                                irys_forms::ControlType::TabControl => vec!["SelectedIndexChanged", "Selected", "Deselecting", "Selecting", "Click", "DoubleClick"],
+                                                irys_forms::ControlType::ProgressBar => vec!["Click", "ValueChanged"],
+                                                irys_forms::ControlType::NumericUpDown => vec!["ValueChanged", "KeyPress", "KeyDown", "GotFocus", "LostFocus", "Enter", "Leave", "Validating"],
+                                                irys_forms::ControlType::MenuStrip | irys_forms::ControlType::ContextMenuStrip => vec!["ItemClicked", "Click"],
+                                                irys_forms::ControlType::StatusStrip => vec!["ItemClicked", "Click"],
+                                                irys_forms::ControlType::ToolStripMenuItem => vec!["Click", "DropDownOpening", "DropDownClosed", "CheckedChanged"],
+                                                irys_forms::ControlType::ToolStripStatusLabel => vec!["Click", "DoubleClick"],
+                                                irys_forms::ControlType::WebBrowser => vec!["DocumentCompleted", "Navigating", "Navigated", "ProgressChanged", "Click"],
+                                                irys_forms::ControlType::DateTimePicker => vec!["ValueChanged", "DateChanged", "DropDown", "DropDownClosed", "GotFocus", "LostFocus", "KeyPress", "KeyDown"],
+                                                irys_forms::ControlType::LinkLabel => vec!["LinkClicked", "Click", "DoubleClick", "MouseEnter", "MouseLeave"],
+                                                irys_forms::ControlType::ToolStrip => vec!["ItemClicked", "ButtonClick", "Click"],
+                                                irys_forms::ControlType::TrackBar => vec!["Scroll", "ValueChanged", "MouseDown", "MouseUp", "GotFocus", "LostFocus"],
+                                                irys_forms::ControlType::MaskedTextBox => vec!["TextChanged", "MaskInputRejected", "KeyPress", "KeyDown", "KeyUp", "GotFocus", "LostFocus", "Enter", "Leave", "Validating"],
+                                                irys_forms::ControlType::SplitContainer => vec!["SplitterMoved", "SplitterMoving", "Click", "DoubleClick"],
+                                                irys_forms::ControlType::FlowLayoutPanel => vec!["Click", "DoubleClick", "Paint", "Resize", "Scroll"],
+                                                irys_forms::ControlType::TableLayoutPanel => vec!["Click", "DoubleClick", "Paint", "Resize", "Scroll", "CellPainting"],
+                                                irys_forms::ControlType::MonthCalendar => vec!["DateChanged", "DateSelected", "Click", "DoubleClick", "GotFocus", "LostFocus"],
+                                                irys_forms::ControlType::HScrollBar => vec!["Scroll", "ValueChanged", "GotFocus", "LostFocus"],
+                                                irys_forms::ControlType::VScrollBar => vec!["Scroll", "ValueChanged", "GotFocus", "LostFocus"],
+                                                irys_forms::ControlType::ToolTip => vec![],
                                                 irys_forms::ControlType::BindingNavigator => vec!["Click"],
                                                 irys_forms::ControlType::BindingSourceComponent => vec!["CurrentChanged", "PositionChanged", "DataSourceChanged"],
                                                 irys_forms::ControlType::DataSetComponent => vec![],
                                                 irys_forms::ControlType::DataTableComponent => vec!["RowChanged", "ColumnChanged"],
                                                 irys_forms::ControlType::DataAdapterComponent => vec!["FillError"],
-                                                _ => vec!["Click"],
+                                                _ => vec!["Click", "DoubleClick"],
                                             };
                                             
                                             rsx! {
@@ -161,23 +183,71 @@ pub fn PropertiesPanel() -> Element {
                                                                     let params = if is_arr {
                                                                         "sender As Object, e As EventArgs, Index As Integer".to_string()
                                                                     } else {
-                                                                        // Determine EventArgs type based on event name
-                                                                        let e_type = match evt.to_lowercase().as_str() {
-                                                                            "mouseclick" | "mousedoubleclick" | "mousedown" | "mouseup" | "mousemove" | "mousewheel" =>
-                                                                                "MouseEventArgs",
-                                                                            "keydown" | "keyup" =>
-                                                                                "KeyEventArgs",
-                                                                            "keypress" =>
-                                                                                "KeyPressEventArgs",
-                                                                            "formclosing" =>
-                                                                                "FormClosingEventArgs",
-                                                                            "formclosed" =>
-                                                                                "FormClosedEventArgs",
-                                                                            "paint" =>
-                                                                                "PaintEventArgs",
-                                                                            _ => "EventArgs",
-                                                                        };
-                                                                        format!("sender As Object, e As {}", e_type)
+                                                                        // Use EventType::parameters() from events.rs for correct signatures
+                                                                        if let Some(event_type) = irys_forms::EventType::from_name(&evt) {
+                                                                            event_type.parameters().to_string()
+                                                                        } else {
+                                                                            // Fallback: determine EventArgs type based on event name
+                                                                            let e_type = match evt.to_lowercase().as_str() {
+                                                                                "mouseclick" | "mousedoubleclick" | "mousedown" | "mouseup" | "mousemove" | "mousewheel"
+                                                                                | "nodemouseclick" | "nodemousedoubleclick" | "columnheadermouseclick" | "rowheadermouseclick" =>
+                                                                                    "MouseEventArgs",
+                                                                                "keydown" | "keyup" =>
+                                                                                    "KeyEventArgs",
+                                                                                "keypress" =>
+                                                                                    "KeyPressEventArgs",
+                                                                                "formclosing" =>
+                                                                                    "FormClosingEventArgs",
+                                                                                "formclosed" =>
+                                                                                    "FormClosedEventArgs",
+                                                                                "paint" | "cellpainting" =>
+                                                                                    "PaintEventArgs",
+                                                                                "cellclick" | "celldoubleclick" | "cellcontentclick" | "cellvaluechanged"
+                                                                                | "cellendedit" | "cellbeginedit" | "cellvalidating" | "cellenter" | "cellleave"
+                                                                                | "cellformatting" =>
+                                                                                    "DataGridViewCellEventArgs",
+                                                                                "dataerror" =>
+                                                                                    "DataGridViewDataErrorEventArgs",
+                                                                                "rowenter" | "rowleave" | "rowvalidating" | "rowvalidated" =>
+                                                                                    "DataGridViewCellEventArgs",
+                                                                                "afterselect" | "beforeselect" =>
+                                                                                    "TreeViewEventArgs",
+                                                                                "aftercheck" | "beforecheck" =>
+                                                                                    "TreeViewEventArgs",
+                                                                                "afterexpand" | "aftercollapse" | "beforeexpand" | "beforecollapse" =>
+                                                                                    "TreeViewEventArgs",
+                                                                                "afterlabeledit" | "beforelabeledit" =>
+                                                                                    "NodeLabelEditEventArgs",
+                                                                                "linkclicked" =>
+                                                                                    "LinkLabelLinkClickedEventArgs",
+                                                                                "splittermoved" | "splittermoving" =>
+                                                                                    "SplitterEventArgs",
+                                                                                "itemdrag" =>
+                                                                                    "ItemDragEventArgs",
+                                                                                "dragdrop" =>
+                                                                                    "DragEventArgs",
+                                                                                "dragenter" =>
+                                                                                    "DragEventArgs",
+                                                                                "dragover" =>
+                                                                                    "DragEventArgs",
+                                                                                "navigating" =>
+                                                                                    "WebBrowserNavigatingEventArgs",
+                                                                                "navigated" =>
+                                                                                    "WebBrowserNavigatedEventArgs",
+                                                                                "scroll" =>
+                                                                                    "ScrollEventArgs",
+                                                                                "drawitem" =>
+                                                                                    "DrawItemEventArgs",
+                                                                                "measureitem" =>
+                                                                                    "MeasureItemEventArgs",
+                                                                                "columnclick" =>
+                                                                                    "ColumnClickEventArgs",
+                                                                                "itemselectionchanged" =>
+                                                                                    "ListViewItemSelectionChangedEventArgs",
+                                                                                _ => "EventArgs",
+                                                                            };
+                                                                            format!("sender As Object, e As {}", e_type)
+                                                                        }
                                                                     };
                                                                     let current_code = state.get_current_code();
 
@@ -331,10 +401,20 @@ pub fn PropertiesPanel() -> Element {
                                         irys_forms::ControlType::Button |
                                         irys_forms::ControlType::Label |
                                         irys_forms::ControlType::CheckBox |
-                                        irys_forms::ControlType::Frame);
+                                        irys_forms::ControlType::RadioButton |
+                                        irys_forms::ControlType::Frame |
+                                        irys_forms::ControlType::LinkLabel |
+                                        irys_forms::ControlType::ToolStripMenuItem |
+                                        irys_forms::ControlType::ToolStripStatusLabel |
+                                        irys_forms::ControlType::TabPage);
                                     let has_text = matches!(control.control_type, 
                                         irys_forms::ControlType::TextBox | 
-                                        irys_forms::ControlType::RichTextBox);
+                                        irys_forms::ControlType::RichTextBox |
+                                        irys_forms::ControlType::ComboBox |
+                                        irys_forms::ControlType::MaskedTextBox |
+                                        irys_forms::ControlType::DateTimePicker |
+                                        irys_forms::ControlType::StatusStrip |
+                                        irys_forms::ControlType::MenuStrip);
                                     let is_non_visual = control.control_type.is_non_visual();
 
                                     rsx! {
@@ -1427,6 +1507,601 @@ pub fn PropertiesPanel() -> Element {
                                                                 state.update_control_property(cid, "List", evt.value());
                                                             }
                                                         }
+                                                    }
+                                                }
+                                            }
+
+                                            // ── Control-Specific Properties ──
+                                            // CheckBox / RadioButton: Checked
+                                            if matches!(control.control_type, irys_forms::ControlType::CheckBox | irys_forms::ControlType::RadioButton) {
+                                                {
+                                                    let is_checked = control.properties.get_bool("Checked").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Checked" }
+                                                        input {
+                                                            r#type: "checkbox",
+                                                            checked: is_checked,
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "Checked", evt.checked().to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // CheckBox: ThreeState
+                                            if matches!(control.control_type, irys_forms::ControlType::CheckBox) {
+                                                {
+                                                    let three_state = control.properties.get_bool("ThreeState").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "ThreeState" }
+                                                        input {
+                                                            r#type: "checkbox",
+                                                            checked: three_state,
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "ThreeState", evt.checked().to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // TextBox: Multiline, ReadOnly, MaxLength, PasswordChar
+                                            if matches!(control.control_type, irys_forms::ControlType::TextBox) {
+                                                {
+                                                    let multiline = control.properties.get_bool("Multiline").unwrap_or(false);
+                                                    let readonly = control.properties.get_bool("ReadOnly").unwrap_or(false);
+                                                    let max_length = control.properties.get_int("MaxLength").unwrap_or(32767);
+                                                    let password_char = control.properties.get_string("PasswordChar").map(|s| s.to_string()).unwrap_or_default();
+                                                    let max_length_str = max_length.to_string();
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Multiline" }
+                                                        input {
+                                                            r#type: "checkbox",
+                                                            checked: multiline,
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "Multiline", evt.checked().to_string());
+                                                            }
+                                                        }
+                                                        div { style: "font-weight: bold;", "ReadOnly" }
+                                                        input {
+                                                            r#type: "checkbox",
+                                                            checked: readonly,
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "ReadOnly", evt.checked().to_string());
+                                                            }
+                                                        }
+                                                        div { style: "font-weight: bold;", "MaxLength" }
+                                                        input {
+                                                            r#type: "number",
+                                                            style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
+                                                            value: "{max_length_str}",
+                                                            oninput: move |evt| {
+                                                                state.update_control_property(cid, "MaxLength", evt.value());
+                                                            }
+                                                        }
+                                                        div { style: "font-weight: bold;", "PasswordChar" }
+                                                        input {
+                                                            style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
+                                                            value: "{password_char}",
+                                                            maxlength: "1",
+                                                            oninput: move |evt| {
+                                                                state.update_control_property(cid, "PasswordChar", evt.value());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // ComboBox: DropDownStyle, Sorted
+                                            if matches!(control.control_type, irys_forms::ControlType::ComboBox) {
+                                                {
+                                                    let ddstyle = control.properties.get_int("DropDownStyle").unwrap_or(0);
+                                                    let sorted = control.properties.get_bool("Sorted").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "DropDownStyle" }
+                                                        select {
+                                                            style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
+                                                            value: "{ddstyle}",
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "DropDownStyle", evt.value());
+                                                            },
+                                                            option { value: "0", "DropDown" }
+                                                            option { value: "1", "Simple" }
+                                                            option { value: "2", "DropDownList" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "Sorted" }
+                                                        input {
+                                                            r#type: "checkbox",
+                                                            checked: sorted,
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "Sorted", evt.checked().to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // ListBox: SelectionMode, Sorted
+                                            if matches!(control.control_type, irys_forms::ControlType::ListBox) {
+                                                {
+                                                    let sel_mode = control.properties.get_int("SelectionMode").unwrap_or(1);
+                                                    let sorted = control.properties.get_bool("Sorted").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "SelectionMode" }
+                                                        select {
+                                                            style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;",
+                                                            value: "{sel_mode}",
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "SelectionMode", evt.value());
+                                                            },
+                                                            option { value: "0", "None" }
+                                                            option { value: "1", "One" }
+                                                            option { value: "2", "MultiSimple" }
+                                                            option { value: "3", "MultiExtended" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "Sorted" }
+                                                        input {
+                                                            r#type: "checkbox",
+                                                            checked: sorted,
+                                                            onchange: move |evt| {
+                                                                state.update_control_property(cid, "Sorted", evt.checked().to_string());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // ProgressBar: Value, Minimum, Maximum, Step
+                                            if matches!(control.control_type, irys_forms::ControlType::ProgressBar) {
+                                                {
+                                                    let val = control.properties.get_int("Value").unwrap_or(0).to_string();
+                                                    let min = control.properties.get_int("Minimum").unwrap_or(0).to_string();
+                                                    let max = control.properties.get_int("Maximum").unwrap_or(100).to_string();
+                                                    let step = control.properties.get_int("Step").unwrap_or(10).to_string();
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Value" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{val}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Value", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Minimum" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{min}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Minimum", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Maximum" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{max}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Maximum", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Step" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{step}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Step", evt.value()); } }
+                                                    }
+                                                }
+                                            }
+                                            // NumericUpDown: Value, Minimum, Maximum, Increment, DecimalPlaces
+                                            if matches!(control.control_type, irys_forms::ControlType::NumericUpDown) {
+                                                {
+                                                    let val = control.properties.get_int("Value").unwrap_or(0).to_string();
+                                                    let min = control.properties.get_int("Minimum").unwrap_or(0).to_string();
+                                                    let max = control.properties.get_int("Maximum").unwrap_or(100).to_string();
+                                                    let inc = control.properties.get_int("Increment").unwrap_or(1).to_string();
+                                                    let dec = control.properties.get_int("DecimalPlaces").unwrap_or(0).to_string();
+                                                    let readonly = control.properties.get_bool("ReadOnly").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Value" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{val}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Value", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Minimum" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{min}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Minimum", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Maximum" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{max}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Maximum", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Increment" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{inc}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Increment", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "DecimalPlaces" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{dec}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "DecimalPlaces", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "ReadOnly" }
+                                                        input { r#type: "checkbox", checked: readonly,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ReadOnly", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // TrackBar: Value, Minimum, Maximum, TickFrequency, SmallChange, LargeChange
+                                            if matches!(control.control_type, irys_forms::ControlType::TrackBar) {
+                                                {
+                                                    let val = control.properties.get_int("Value").unwrap_or(0).to_string();
+                                                    let min = control.properties.get_int("Minimum").unwrap_or(0).to_string();
+                                                    let max = control.properties.get_int("Maximum").unwrap_or(10).to_string();
+                                                    let tick = control.properties.get_int("TickFrequency").unwrap_or(1).to_string();
+                                                    let sm = control.properties.get_int("SmallChange").unwrap_or(1).to_string();
+                                                    let lg = control.properties.get_int("LargeChange").unwrap_or(5).to_string();
+                                                    let orient = control.properties.get_string("Orientation").map(|s| s.to_string()).unwrap_or_else(|| "Horizontal".to_string());
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Value" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{val}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Value", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Minimum" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{min}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Minimum", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Maximum" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{max}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Maximum", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "TickFrequency" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{tick}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "TickFrequency", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "SmallChange" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{sm}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "SmallChange", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "LargeChange" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{lg}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "LargeChange", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Orientation" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{orient}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "Orientation", evt.value()); },
+                                                            option { value: "Horizontal", "Horizontal" }
+                                                            option { value: "Vertical", "Vertical" }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // HScrollBar / VScrollBar: Value, Minimum, Maximum, SmallChange, LargeChange
+                                            if matches!(control.control_type, irys_forms::ControlType::HScrollBar | irys_forms::ControlType::VScrollBar) {
+                                                {
+                                                    let val = control.properties.get_int("Value").unwrap_or(0).to_string();
+                                                    let min = control.properties.get_int("Minimum").unwrap_or(0).to_string();
+                                                    let max = control.properties.get_int("Maximum").unwrap_or(100).to_string();
+                                                    let sm = control.properties.get_int("SmallChange").unwrap_or(1).to_string();
+                                                    let lg = control.properties.get_int("LargeChange").unwrap_or(10).to_string();
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Value" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{val}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Value", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Minimum" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{min}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Minimum", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "Maximum" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{max}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Maximum", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "SmallChange" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{sm}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "SmallChange", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "LargeChange" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{lg}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "LargeChange", evt.value()); } }
+                                                    }
+                                                }
+                                            }
+                                            // DateTimePicker: Format, ShowCheckBox, ShowUpDown, CustomFormat
+                                            if matches!(control.control_type, irys_forms::ControlType::DateTimePicker) {
+                                                {
+                                                    let fmt = control.properties.get_string("Format").map(|s| s.to_string()).unwrap_or_else(|| "Long".to_string());
+                                                    let custom_fmt = control.properties.get_string("CustomFormat").map(|s| s.to_string()).unwrap_or_default();
+                                                    let show_cb = control.properties.get_bool("ShowCheckBox").unwrap_or(false);
+                                                    let show_ud = control.properties.get_bool("ShowUpDown").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Format" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{fmt}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "Format", evt.value()); },
+                                                            option { value: "Long", "Long" }
+                                                            option { value: "Short", "Short" }
+                                                            option { value: "Time", "Time" }
+                                                            option { value: "Custom", "Custom" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "CustomFormat" }
+                                                        input { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{custom_fmt}",
+                                                            placeholder: "yyyy-MM-dd",
+                                                            oninput: move |evt| { state.update_control_property(cid, "CustomFormat", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "ShowCheckBox" }
+                                                        input { r#type: "checkbox", checked: show_cb,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ShowCheckBox", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "ShowUpDown" }
+                                                        input { r#type: "checkbox", checked: show_ud,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ShowUpDown", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // MaskedTextBox: Mask, PromptChar
+                                            if matches!(control.control_type, irys_forms::ControlType::MaskedTextBox) {
+                                                {
+                                                    let mask = control.properties.get_string("Mask").map(|s| s.to_string()).unwrap_or_default();
+                                                    let prompt = control.properties.get_string("PromptChar").map(|s| s.to_string()).unwrap_or_else(|| "_".to_string());
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Mask" }
+                                                        input { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{mask}",
+                                                            placeholder: "000-00-0000",
+                                                            oninput: move |evt| { state.update_control_property(cid, "Mask", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "PromptChar" }
+                                                        input { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{prompt}",
+                                                            maxlength: "1",
+                                                            oninput: move |evt| { state.update_control_property(cid, "PromptChar", evt.value()); } }
+                                                    }
+                                                }
+                                            }
+                                            // SplitContainer: Orientation, SplitterDistance, FixedPanel, IsSplitterFixed
+                                            if matches!(control.control_type, irys_forms::ControlType::SplitContainer) {
+                                                {
+                                                    let orient = control.properties.get_string("Orientation").map(|s| s.to_string()).unwrap_or_else(|| "Vertical".to_string());
+                                                    let dist = control.properties.get_int("SplitterDistance").unwrap_or(100).to_string();
+                                                    let fixed = control.properties.get_string("FixedPanel").map(|s| s.to_string()).unwrap_or_else(|| "None".to_string());
+                                                    let is_fixed = control.properties.get_bool("IsSplitterFixed").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Orientation" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{orient}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "Orientation", evt.value()); },
+                                                            option { value: "Vertical", "Vertical" }
+                                                            option { value: "Horizontal", "Horizontal" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "SplitterDist" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{dist}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "SplitterDistance", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "FixedPanel" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{fixed}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "FixedPanel", evt.value()); },
+                                                            option { value: "None", "None" }
+                                                            option { value: "Panel1", "Panel1" }
+                                                            option { value: "Panel2", "Panel2" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "SplitterFixed" }
+                                                        input { r#type: "checkbox", checked: is_fixed,
+                                                            onchange: move |evt| { state.update_control_property(cid, "IsSplitterFixed", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // FlowLayoutPanel: FlowDirection, WrapContents
+                                            if matches!(control.control_type, irys_forms::ControlType::FlowLayoutPanel) {
+                                                {
+                                                    let flow_dir = control.properties.get_string("FlowDirection").map(|s| s.to_string()).unwrap_or_else(|| "LeftToRight".to_string());
+                                                    let wrap = control.properties.get_bool("WrapContents").unwrap_or(true);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "FlowDirection" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{flow_dir}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "FlowDirection", evt.value()); },
+                                                            option { value: "LeftToRight", "LeftToRight" }
+                                                            option { value: "TopDown", "TopDown" }
+                                                            option { value: "RightToLeft", "RightToLeft" }
+                                                            option { value: "BottomUp", "BottomUp" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "WrapContents" }
+                                                        input { r#type: "checkbox", checked: wrap,
+                                                            onchange: move |evt| { state.update_control_property(cid, "WrapContents", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // TableLayoutPanel: ColumnCount, RowCount
+                                            if matches!(control.control_type, irys_forms::ControlType::TableLayoutPanel) {
+                                                {
+                                                    let cols = control.properties.get_int("ColumnCount").unwrap_or(2).to_string();
+                                                    let rows = control.properties.get_int("RowCount").unwrap_or(2).to_string();
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "ColumnCount" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{cols}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "ColumnCount", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "RowCount" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{rows}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "RowCount", evt.value()); } }
+                                                    }
+                                                }
+                                            }
+                                            // MonthCalendar: ShowToday, ShowWeekNumbers, MaxSelectionCount
+                                            if matches!(control.control_type, irys_forms::ControlType::MonthCalendar) {
+                                                {
+                                                    let show_today = control.properties.get_bool("ShowToday").unwrap_or(true);
+                                                    let show_weeks = control.properties.get_bool("ShowWeekNumbers").unwrap_or(false);
+                                                    let max_sel = control.properties.get_int("MaxSelectionCount").unwrap_or(7).to_string();
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "ShowToday" }
+                                                        input { r#type: "checkbox", checked: show_today,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ShowToday", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "ShowWeekNums" }
+                                                        input { r#type: "checkbox", checked: show_weeks,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ShowWeekNumbers", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "MaxSelection" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{max_sel}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "MaxSelectionCount", evt.value()); } }
+                                                    }
+                                                }
+                                            }
+                                            // LinkLabel: LinkColor, VisitedLinkColor
+                                            if matches!(control.control_type, irys_forms::ControlType::LinkLabel) {
+                                                {
+                                                    let link_color = control.properties.get_string("LinkColor").map(|s| s.to_string()).unwrap_or_else(|| "#0066cc".to_string());
+                                                    let visited = control.properties.get_string("VisitedLinkColor").map(|s| s.to_string()).unwrap_or_else(|| "#800080".to_string());
+                                                    let link_visited = control.properties.get_bool("LinkVisited").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "LinkColor" }
+                                                        input { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{link_color}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "LinkColor", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "VisitedColor" }
+                                                        input { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{visited}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "VisitedLinkColor", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "LinkVisited" }
+                                                        input { r#type: "checkbox", checked: link_visited,
+                                                            onchange: move |evt| { state.update_control_property(cid, "LinkVisited", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // PictureBox: SizeMode, BorderStyle
+                                            if matches!(control.control_type, irys_forms::ControlType::PictureBox) {
+                                                {
+                                                    let mode = control.properties.get_string("SizeMode").map(|s| s.to_string()).unwrap_or_else(|| "Normal".to_string());
+                                                    let bs = control.properties.get_string("BorderStyle").map(|s| s.to_string()).unwrap_or_else(|| "None".to_string());
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "SizeMode" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{mode}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "SizeMode", evt.value()); },
+                                                            option { value: "Normal", "Normal" }
+                                                            option { value: "StretchImage", "StretchImage" }
+                                                            option { value: "AutoSize", "AutoSize" }
+                                                            option { value: "CenterImage", "CenterImage" }
+                                                            option { value: "Zoom", "Zoom" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "BorderStyle" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{bs}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "BorderStyle", evt.value()); },
+                                                            option { value: "None", "None" }
+                                                            option { value: "FixedSingle", "FixedSingle" }
+                                                            option { value: "Fixed3D", "Fixed3D" }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            // Panel: BorderStyle, AutoScroll
+                                            if matches!(control.control_type, irys_forms::ControlType::Panel) {
+                                                {
+                                                    let bs = control.properties.get_string("BorderStyle").map(|s| s.to_string()).unwrap_or_else(|| "None".to_string());
+                                                    let autoscroll = control.properties.get_bool("AutoScroll").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "BorderStyle" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{bs}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "BorderStyle", evt.value()); },
+                                                            option { value: "None", "None" }
+                                                            option { value: "FixedSingle", "FixedSingle" }
+                                                            option { value: "Fixed3D", "Fixed3D" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "AutoScroll" }
+                                                        input { r#type: "checkbox", checked: autoscroll,
+                                                            onchange: move |evt| { state.update_control_property(cid, "AutoScroll", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // ToolStripMenuItem: Checked, CheckOnClick, ShortcutKeys
+                                            if matches!(control.control_type, irys_forms::ControlType::ToolStripMenuItem) {
+                                                {
+                                                    let checked = control.properties.get_bool("Checked").unwrap_or(false);
+                                                    let check_on_click = control.properties.get_bool("CheckOnClick").unwrap_or(false);
+                                                    let shortcut = control.properties.get_string("ShortcutKeys").map(|s| s.to_string()).unwrap_or_default();
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Checked" }
+                                                        input { r#type: "checkbox", checked: checked,
+                                                            onchange: move |evt| { state.update_control_property(cid, "Checked", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "CheckOnClick" }
+                                                        input { r#type: "checkbox", checked: check_on_click,
+                                                            onchange: move |evt| { state.update_control_property(cid, "CheckOnClick", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "ShortcutKeys" }
+                                                        input { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{shortcut}",
+                                                            placeholder: "Ctrl+S",
+                                                            oninput: move |evt| { state.update_control_property(cid, "ShortcutKeys", evt.value()); } }
+                                                    }
+                                                }
+                                            }
+                                            // ToolTip: AutoPopDelay, InitialDelay, ShowAlways
+                                            if matches!(control.control_type, irys_forms::ControlType::ToolTip) {
+                                                {
+                                                    let autopop = control.properties.get_int("AutoPopDelay").unwrap_or(5000).to_string();
+                                                    let initial = control.properties.get_int("InitialDelay").unwrap_or(500).to_string();
+                                                    let show_always = control.properties.get_bool("ShowAlways").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "AutoPopDelay" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{autopop}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "AutoPopDelay", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "InitialDelay" }
+                                                        input { r#type: "number", style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{initial}",
+                                                            oninput: move |evt| { state.update_control_property(cid, "InitialDelay", evt.value()); } }
+                                                        div { style: "font-weight: bold;", "ShowAlways" }
+                                                        input { r#type: "checkbox", checked: show_always,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ShowAlways", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // TreeView: CheckBoxes, ShowLines, ShowRootLines, ShowPlusMinus, LabelEdit
+                                            if matches!(control.control_type, irys_forms::ControlType::TreeView) {
+                                                {
+                                                    let cbs = control.properties.get_bool("CheckBoxes").unwrap_or(false);
+                                                    let lines = control.properties.get_bool("ShowLines").unwrap_or(true);
+                                                    let root_lines = control.properties.get_bool("ShowRootLines").unwrap_or(true);
+                                                    let plus_minus = control.properties.get_bool("ShowPlusMinus").unwrap_or(true);
+                                                    let label_edit = control.properties.get_bool("LabelEdit").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "CheckBoxes" }
+                                                        input { r#type: "checkbox", checked: cbs,
+                                                            onchange: move |evt| { state.update_control_property(cid, "CheckBoxes", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "ShowLines" }
+                                                        input { r#type: "checkbox", checked: lines,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ShowLines", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "ShowRootLines" }
+                                                        input { r#type: "checkbox", checked: root_lines,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ShowRootLines", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "ShowPlusMinus" }
+                                                        input { r#type: "checkbox", checked: plus_minus,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ShowPlusMinus", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "LabelEdit" }
+                                                        input { r#type: "checkbox", checked: label_edit,
+                                                            onchange: move |evt| { state.update_control_property(cid, "LabelEdit", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // ListView: View, FullRowSelect, GridLines, CheckBoxes, MultiSelect, LabelEdit
+                                            if matches!(control.control_type, irys_forms::ControlType::ListView) {
+                                                {
+                                                    let view = control.properties.get_int("View").unwrap_or(1);
+                                                    let full_row = control.properties.get_bool("FullRowSelect").unwrap_or(false);
+                                                    let grid_lines = control.properties.get_bool("GridLines").unwrap_or(false);
+                                                    let cbs = control.properties.get_bool("CheckBoxes").unwrap_or(false);
+                                                    let multi = control.properties.get_bool("MultiSelect").unwrap_or(true);
+                                                    let label_edit = control.properties.get_bool("LabelEdit").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "View" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{view}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "View", evt.value()); },
+                                                            option { value: "0", "LargeIcon" }
+                                                            option { value: "1", "Details" }
+                                                            option { value: "2", "SmallIcon" }
+                                                            option { value: "3", "List" }
+                                                            option { value: "4", "Tile" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "FullRowSelect" }
+                                                        input { r#type: "checkbox", checked: full_row,
+                                                            onchange: move |evt| { state.update_control_property(cid, "FullRowSelect", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "GridLines" }
+                                                        input { r#type: "checkbox", checked: grid_lines,
+                                                            onchange: move |evt| { state.update_control_property(cid, "GridLines", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "CheckBoxes" }
+                                                        input { r#type: "checkbox", checked: cbs,
+                                                            onchange: move |evt| { state.update_control_property(cid, "CheckBoxes", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "MultiSelect" }
+                                                        input { r#type: "checkbox", checked: multi,
+                                                            onchange: move |evt| { state.update_control_property(cid, "MultiSelect", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "LabelEdit" }
+                                                        input { r#type: "checkbox", checked: label_edit,
+                                                            onchange: move |evt| { state.update_control_property(cid, "LabelEdit", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // DataGridView: ReadOnly, AllowUserToAddRows/DeleteRows, AutoGenerateColumns
+                                            if matches!(control.control_type, irys_forms::ControlType::DataGridView) {
+                                                {
+                                                    let readonly = control.properties.get_bool("ReadOnly").unwrap_or(false);
+                                                    let add_rows = control.properties.get_bool("AllowUserToAddRows").unwrap_or(true);
+                                                    let del_rows = control.properties.get_bool("AllowUserToDeleteRows").unwrap_or(true);
+                                                    let auto_gen = control.properties.get_bool("AutoGenerateColumns").unwrap_or(true);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "ReadOnly" }
+                                                        input { r#type: "checkbox", checked: readonly,
+                                                            onchange: move |evt| { state.update_control_property(cid, "ReadOnly", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "AllowAddRows" }
+                                                        input { r#type: "checkbox", checked: add_rows,
+                                                            onchange: move |evt| { state.update_control_property(cid, "AllowUserToAddRows", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "AllowDelRows" }
+                                                        input { r#type: "checkbox", checked: del_rows,
+                                                            onchange: move |evt| { state.update_control_property(cid, "AllowUserToDeleteRows", evt.checked().to_string()); } }
+                                                        div { style: "font-weight: bold;", "AutoGenCols" }
+                                                        input { r#type: "checkbox", checked: auto_gen,
+                                                            onchange: move |evt| { state.update_control_property(cid, "AutoGenerateColumns", evt.checked().to_string()); } }
+                                                    }
+                                                }
+                                            }
+                                            // TabControl: Alignment, Multiline
+                                            if matches!(control.control_type, irys_forms::ControlType::TabControl) {
+                                                {
+                                                    let alignment = control.properties.get_string("Alignment").map(|s| s.to_string()).unwrap_or_else(|| "Top".to_string());
+                                                    let multiline = control.properties.get_bool("Multiline").unwrap_or(false);
+                                                    rsx! {
+                                                        div { style: "font-weight: bold;", "Alignment" }
+                                                        select { style: "width: 100%; border: 1px solid #ccc; padding: 2px 4px; font-size: 12px;", value: "{alignment}",
+                                                            onchange: move |evt| { state.update_control_property(cid, "Alignment", evt.value()); },
+                                                            option { value: "Top", "Top" }
+                                                            option { value: "Bottom", "Bottom" }
+                                                            option { value: "Left", "Left" }
+                                                            option { value: "Right", "Right" }
+                                                        }
+                                                        div { style: "font-weight: bold;", "Multiline" }
+                                                        input { r#type: "checkbox", checked: multiline,
+                                                            onchange: move |evt| { state.update_control_property(cid, "Multiline", evt.checked().to_string()); } }
                                                     }
                                                 }
                                             }

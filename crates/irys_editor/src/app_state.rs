@@ -594,6 +594,41 @@ impl AppState {
                         prop if prop.starts_with("DataBindings.") => {
                             control.properties.set(prop, value);
                         },
+                        // Boolean properties stored directly
+                        "Checked" | "ThreeState" | "Multiline" | "ReadOnly" |
+                        "Sorted" | "ShowCheckBox" | "ShowUpDown" |
+                        "IsSplitterFixed" | "WrapContents" |
+                        "ShowToday" | "ShowWeekNumbers" | "LinkVisited" |
+                        "AutoScroll" | "CheckOnClick" | "ShowAlways" |
+                        "CheckBoxes" | "ShowLines" | "ShowRootLines" |
+                        "ShowPlusMinus" | "LabelEdit" | "FullRowSelect" |
+                        "GridLines" | "MultiSelect" | "AllowUserToAddRows" |
+                        "AllowUserToDeleteRows" | "AutoGenerateColumns" |
+                        "WordWrap" | "HidePromptOnLeave" => {
+                            if let Ok(b) = value.parse::<bool>() {
+                                control.properties.set(property, b);
+                            }
+                        },
+                        // Integer properties stored directly
+                        "Minimum" | "Maximum" | "Step" | "Increment" |
+                        "DecimalPlaces" | "TickFrequency" | "SmallChange" |
+                        "LargeChange" | "SplitterDistance" | "MaxSelectionCount" |
+                        "MaxLength" | "ColumnCount" | "RowCount" |
+                        "MaxDropDownItems" | "AutoPopDelay" | "InitialDelay" |
+                        "DropDownStyle" | "SelectionMode" | "View" => {
+                            if let Ok(val) = value.parse::<i32>() {
+                                use irys_forms::properties::PropertyValue;
+                                control.properties.set_raw(property, PropertyValue::Integer(val));
+                            }
+                        },
+                        // String properties stored directly
+                        "Format" | "CustomFormat" | "Mask" | "PromptChar" |
+                        "Orientation" | "FixedPanel" | "FlowDirection" |
+                        "SizeMode" | "BorderStyle" | "Alignment" |
+                        "LinkColor" | "VisitedLinkColor" | "PasswordChar" |
+                        "ShortcutKeys" | "CellBorderStyle" | "Appearance" => {
+                            control.properties.set(property, value);
+                        },
                         _ => {}
                     }
                 }
