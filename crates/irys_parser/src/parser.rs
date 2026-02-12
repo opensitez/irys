@@ -159,6 +159,7 @@ fn parse_const_statement(pair: Pair<Rule>) -> ParseResult<ConstDecl> {
                 match s.as_str() {
                     "public" => visibility = Visibility::Public,
                     "private" => visibility = Visibility::Private,
+                    "protected" => visibility = Visibility::Protected,
                     "friend" => visibility = Visibility::Friend,
                     _ => {}
                 }
@@ -242,6 +243,7 @@ fn parse_sub_decl(pair: Pair<Rule>) -> ParseResult<SubDecl> {
                 match s.as_str() {
                     "public" => visibility = Visibility::Public,
                     "private" => visibility = Visibility::Private,
+                    "protected" => visibility = Visibility::Protected,
                     "friend" => visibility = Visibility::Friend,
                     _ => {}
                 }
@@ -323,6 +325,7 @@ fn parse_function_decl(pair: Pair<Rule>) -> ParseResult<FunctionDecl> {
                 match s.as_str() {
                     "public" => visibility = Visibility::Public,
                     "private" => visibility = Visibility::Private,
+                    "protected" => visibility = Visibility::Protected,
                     "friend" => visibility = Visibility::Friend,
                     _ => {}
                 }
@@ -413,6 +416,7 @@ fn parse_class_decl(pair: Pair<Rule>) -> ParseResult<ClassDecl> {
                 match s.as_str() {
                     "public" => visibility = Visibility::Public,
                     "private" => visibility = Visibility::Private,
+                    "protected" => visibility = Visibility::Protected,
                     "friend" => visibility = Visibility::Friend,
                     _ => {}
                 }
@@ -421,6 +425,9 @@ fn parse_class_decl(pair: Pair<Rule>) -> ParseResult<ClassDecl> {
                  if let Some(type_pair) = p.into_inner().next() {
                     inherits = Some(VBType::from_str(type_pair.as_str()));
                 }
+            }
+            Rule::implements_statement => {
+                // Parsed but not stored yet — future enhancement
             }
             Rule::identifier => name = Identifier::new(p.as_str()),
             Rule::property_decl => properties.push(parse_property_decl(p)?),
@@ -527,6 +534,9 @@ fn parse_parameter(pair: Pair<Rule>) -> ParseResult<Parameter> {
     let mut pass_type = ParameterPassType::ByRef;
     let mut name = Identifier::new("");
     let mut param_type = None;
+    let mut is_optional = false;
+    let mut default_value = None;
+    let mut is_nullable = false;
 
     for p in inner {
         match p.as_rule() {
@@ -538,8 +548,17 @@ fn parse_parameter(pair: Pair<Rule>) -> ParseResult<Parameter> {
                     pass_type = ParameterPassType::ByRef;
                 }
             }
-            Rule::identifier => name = Identifier::new(p.as_str()),
+            Rule::identifier => {
+                let text = p.as_str().to_lowercase();
+                if text == "optional" {
+                    is_optional = true;
+                } else {
+                    name = Identifier::new(p.as_str());
+                }
+            }
             Rule::type_name => param_type = Some(VBType::from_str(p.as_str())),
+            Rule::nullable_marker => is_nullable = true,
+            Rule::expression => default_value = Some(parse_expression(p)?),
             _ => {}
         }
     }
@@ -548,6 +567,9 @@ fn parse_parameter(pair: Pair<Rule>) -> ParseResult<Parameter> {
         pass_type,
         name,
         param_type,
+        is_optional,
+        default_value,
+        is_nullable,
     })
 }
 
@@ -711,6 +733,62 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
 
             Ok(Statement::SetAssignment { target, value })
         }
+        Rule::compound_assign_statement => {
+            let mut inner = pair.into_inner();
+            let target = Identifier::new(inner.next().unwrap().as_str());
+
+            let mut members = Vec::new();
+            let mut indices = Vec::new();
+            let mut op = CompoundOp::AddAssign;
+            let mut expressions = Vec::new();
+
+            for p in inner {
+                match p.as_rule() {
+                    Rule::identifier => members.push(Identifier::new(p.as_str())),
+                    Rule::compound_assign_op => {
+                        op = match p.as_str() {
+                            "+=" => CompoundOp::AddAssign,
+                            "-=" => CompoundOp::SubtractAssign,
+                            "*=" => CompoundOp::MultiplyAssign,
+                            "/=" => CompoundOp::DivideAssign,
+                            "\\=" => CompoundOp::IntDivideAssign,
+                            "&=" => CompoundOp::ConcatAssign,
+                            "^=" => CompoundOp::ExponentAssign,
+                            "<<=" => CompoundOp::ShiftLeftAssign,
+                            ">>=" => CompoundOp::ShiftRightAssign,
+                            _ => CompoundOp::AddAssign,
+                        };
+                    }
+                    Rule::expression => expressions.push(parse_expression(p)?),
+                    _ => {}
+                }
+            }
+            let value = expressions.pop().unwrap();
+            if !expressions.is_empty() {
+                indices = expressions;
+            }
+
+            Ok(Statement::CompoundAssignment {
+                target,
+                members,
+                indices,
+                operator: op,
+                value,
+            })
+        }
+        Rule::raiseevent_statement => {
+            let mut inner = pair.into_inner();
+            let event_name = Identifier::new(inner.next().unwrap().as_str());
+            let mut arguments = Vec::new();
+            for p in inner {
+                if p.as_rule() == Rule::argument_list {
+                    for arg in p.into_inner() {
+                        arguments.push(parse_expression(arg)?);
+                    }
+                }
+            }
+            Ok(Statement::RaiseEvent { event_name, arguments })
+        }
         Rule::if_statement => parse_if_statement(pair),
         Rule::single_line_if_statement => parse_single_line_if(pair),
         Rule::for_each_statement => parse_for_each_statement(pair),
@@ -807,6 +885,13 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
             let addressof = inner.next().unwrap(); // addressof_expr
             let handler = addressof.into_inner().next().unwrap().as_str().to_string();
             Ok(Statement::RemoveHandler { event_target, handler })
+        }
+        // New declarations — parse gracefully as no-op statements for now
+        Rule::interface_decl | Rule::structure_decl | Rule::namespace_decl |
+        Rule::event_decl | Rule::delegate_sub_decl | Rule::delegate_function_decl => {
+            // These are parsed by the grammar but the runtime doesn't execute them yet.
+            // Return an expression statement with Nothing to avoid breaking parsing.
+            Ok(Statement::ExpressionStatement(Expression::Nothing))
         }
         _ => Err(ParseError::UnexpectedRule(pair.as_rule())),
     }
@@ -953,15 +1038,18 @@ fn parse_do_loop_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
     let mut pre_condition = None;
     let mut post_condition = None;
     let mut body = Vec::new();
+    let mut current_loop_type = LoopConditionType::While;
 
     for p in inner {
         match p.as_rule() {
+            Rule::do_while_kw => current_loop_type = LoopConditionType::While,
+            Rule::do_until_kw => current_loop_type = LoopConditionType::Until,
             Rule::expression => {
                 // Determine if it's pre or post condition based on position
                 if body.is_empty() {
-                    pre_condition = Some((LoopConditionType::While, parse_expression(p)?));
+                    pre_condition = Some((current_loop_type, parse_expression(p)?));
                 } else {
-                    post_condition = Some((LoopConditionType::While, parse_expression(p)?));
+                    post_condition = Some((current_loop_type, parse_expression(p)?));
                 }
             }
             Rule::statement | Rule::statement_line => {
@@ -988,7 +1076,7 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
     match pair.as_rule() {
         Rule::expression | Rule::logical_xor | Rule::logical_or | Rule::logical_and |
         Rule::equality | Rule::comparison | Rule::bit_shift | Rule::additive |
-        Rule::multiplicative => {
+        Rule::multiplicative | Rule::exponent => {
             parse_binary_expression(pair)
         }
         Rule::not_condition => {
@@ -1003,7 +1091,16 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
             }
         }
         Rule::lambda_expression => {
-            parse_lambda_expression(pair) // Add this match arm
+            parse_lambda_expression(pair)
+        }
+        Rule::typeof_expression => {
+            let mut inner = pair.into_inner();
+            let expr = parse_expression(inner.next().unwrap())?;
+            let type_name = inner.next().unwrap().as_str().to_string();
+            Ok(Expression::TypeOf {
+                expr: Box::new(expr),
+                type_name,
+            })
         }
 
         Rule::unary => {
@@ -1330,13 +1427,15 @@ fn parse_binary_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
 
     while let Some(op_pair) = inner.next() {
         let op = match op_pair.as_rule() {
-            Rule::add_op | Rule::mult_op | Rule::eq_op | Rule::comp_op | Rule::and_op | Rule::or_op | Rule::xor_op | Rule::shift_op => {
+            Rule::add_op | Rule::mult_op | Rule::eq_op | Rule::comp_op | Rule::and_op | Rule::or_op | Rule::xor_op | Rule::shift_op | Rule::like_op | Rule::exp_op => {
                 match op_pair.as_str().to_lowercase().as_str() {
                     "+" => BinaryOp::Add,
                     "-" => BinaryOp::Subtract,
                     "*" => BinaryOp::Multiply,
                     "/" => BinaryOp::Divide,
+                    "\\" => BinaryOp::IntegerDivide,
                     "mod" => BinaryOp::Modulo,
+                    "^" => BinaryOp::Exponent,
                     "&" => BinaryOp::Concatenate,
                     "=" => BinaryOp::Equal,
                     "<>" => BinaryOp::NotEqual,
@@ -1344,14 +1443,16 @@ fn parse_binary_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
                     "<=" => BinaryOp::LessThanOrEqual,
                     ">" => BinaryOp::GreaterThan,
                     ">=" => BinaryOp::GreaterThanOrEqual,
-                    "and" | "andalso" => BinaryOp::And,
-                    "or" | "orelse" => BinaryOp::Or,
+                    "and" => BinaryOp::And,
+                    "andalso" => BinaryOp::AndAlso,
+                    "or" => BinaryOp::Or,
+                    "orelse" => BinaryOp::OrElse,
                     "xor" => BinaryOp::Xor,
                     "<<" => BinaryOp::BitShiftLeft,
                     ">>" => BinaryOp::BitShiftRight,
-                    "is" => BinaryOp::Equal,
-                    "isnot" => BinaryOp::NotEqual,
-                    "\\" => BinaryOp::Divide, // Integer division
+                    "is" => BinaryOp::Is,
+                    "isnot" => BinaryOp::IsNot,
+                    "like" => BinaryOp::Like,
                     _ => return Err(ParseError::Custom(format!("Unknown operator: {}", op_pair.as_str()))),
                 }
             }
@@ -1664,6 +1765,7 @@ fn parse_enum_decl(pair: Pair<Rule>) -> ParseResult<EnumDecl> {
                 match text.as_str() {
                     "public" => visibility = Visibility::Public,
                     "private" => visibility = Visibility::Private,
+                    "protected" => visibility = Visibility::Protected,
                     "friend" => visibility = Visibility::Friend,
                     _ => name = Identifier::new(p.as_str()),
                 }

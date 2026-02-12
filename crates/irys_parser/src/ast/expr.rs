@@ -22,7 +22,9 @@ pub enum Expression {
     Subtract(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
     Divide(Box<Expression>, Box<Expression>),
+    IntegerDivide(Box<Expression>, Box<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
+    Exponent(Box<Expression>, Box<Expression>),
     Concatenate(Box<Expression>, Box<Expression>),
 
     // Comparison
@@ -35,10 +37,24 @@ pub enum Expression {
 
     // Logical
     And(Box<Expression>, Box<Expression>),
-
+    AndAlso(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
+    OrElse(Box<Expression>, Box<Expression>),
     Xor(Box<Expression>, Box<Expression>),
     Not(Box<Expression>),
+
+    // Reference equality
+    Is(Box<Expression>, Box<Expression>),
+    IsNot(Box<Expression>, Box<Expression>),
+    
+    // Pattern matching
+    Like(Box<Expression>, Box<Expression>),
+
+    // Type checking
+    TypeOf {
+        expr: Box<Expression>,
+        type_name: String,
+    },
     
     // Bitwise Shift
     BitShiftLeft(Box<Expression>, Box<Expression>),
@@ -83,7 +99,9 @@ impl Expression {
             BinaryOp::Subtract => Expression::Subtract(Box::new(left), Box::new(right)),
             BinaryOp::Multiply => Expression::Multiply(Box::new(left), Box::new(right)),
             BinaryOp::Divide => Expression::Divide(Box::new(left), Box::new(right)),
+            BinaryOp::IntegerDivide => Expression::IntegerDivide(Box::new(left), Box::new(right)),
             BinaryOp::Modulo => Expression::Modulo(Box::new(left), Box::new(right)),
+            BinaryOp::Exponent => Expression::Exponent(Box::new(left), Box::new(right)),
             BinaryOp::Concatenate => Expression::Concatenate(Box::new(left), Box::new(right)),
             BinaryOp::Equal => Expression::Equal(Box::new(left), Box::new(right)),
             BinaryOp::NotEqual => Expression::NotEqual(Box::new(left), Box::new(right)),
@@ -92,10 +110,15 @@ impl Expression {
             BinaryOp::GreaterThan => Expression::GreaterThan(Box::new(left), Box::new(right)),
             BinaryOp::GreaterThanOrEqual => Expression::GreaterThanOrEqual(Box::new(left), Box::new(right)),
             BinaryOp::And => Expression::And(Box::new(left), Box::new(right)),
+            BinaryOp::AndAlso => Expression::AndAlso(Box::new(left), Box::new(right)),
             BinaryOp::Or => Expression::Or(Box::new(left), Box::new(right)),
+            BinaryOp::OrElse => Expression::OrElse(Box::new(left), Box::new(right)),
             BinaryOp::Xor => Expression::Xor(Box::new(left), Box::new(right)),
             BinaryOp::BitShiftLeft => Expression::BitShiftLeft(Box::new(left), Box::new(right)),
             BinaryOp::BitShiftRight => Expression::BitShiftRight(Box::new(left), Box::new(right)),
+            BinaryOp::Is => Expression::Is(Box::new(left), Box::new(right)),
+            BinaryOp::IsNot => Expression::IsNot(Box::new(left), Box::new(right)),
+            BinaryOp::Like => Expression::Like(Box::new(left), Box::new(right)),
         }
     }
 }
@@ -106,7 +129,9 @@ pub enum BinaryOp {
     Subtract,
     Multiply,
     Divide,
+    IntegerDivide,
     Modulo,
+    Exponent,
     Concatenate,
     Equal,
     NotEqual,
@@ -115,10 +140,15 @@ pub enum BinaryOp {
     GreaterThan,
     GreaterThanOrEqual,
     And,
+    AndAlso,
     Or,
+    OrElse,
     Xor,
     BitShiftLeft,
     BitShiftRight,
+    Is,
+    IsNot,
+    Like,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LambdaBody {

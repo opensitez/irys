@@ -85,6 +85,12 @@ pub struct Parameter {
     pub pass_type: ParameterPassType,
     pub name: Identifier,
     pub param_type: Option<VBType>,
+    #[serde(default)]
+    pub is_optional: bool,
+    #[serde(default)]
+    pub default_value: Option<Expression>,
+    #[serde(default)]
+    pub is_nullable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -97,6 +103,7 @@ pub enum ParameterPassType {
 pub enum Visibility {
     Public,
     Private,
+    Protected,
     Friend,
 }
 

@@ -42,6 +42,21 @@ pub enum Statement {
         bounds: Vec<Expression>,
     },
 
+    // Compound assignment (+=, -=, etc.)
+    CompoundAssignment {
+        target: Identifier,
+        members: Vec<Identifier>,
+        indices: Vec<Expression>,
+        operator: CompoundOp,
+        value: Expression,
+    },
+
+    // RaiseEvent
+    RaiseEvent {
+        event_name: Identifier,
+        arguments: Vec<Expression>,
+    },
+
     // Control flow
     If {
         condition: Expression,
@@ -220,4 +235,17 @@ pub enum FileOpenMode {
     Append,
     Binary,
     Random,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum CompoundOp {
+    AddAssign,       // +=
+    SubtractAssign,  // -=
+    MultiplyAssign,  // *=
+    DivideAssign,    // /=
+    IntDivideAssign, // \=
+    ConcatAssign,    // &=
+    ExponentAssign,  // ^=
+    ShiftLeftAssign, // <<=
+    ShiftRightAssign,// >>=
 }

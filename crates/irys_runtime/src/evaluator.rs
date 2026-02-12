@@ -110,6 +110,21 @@ pub fn evaluate(expr: &Expression, env: &Environment) -> Result<Value, RuntimeEr
             Ok(Value::Double(a / b))
         }
 
+        Expression::IntegerDivide(left, right) => {
+            let l = evaluate(left, env)?;
+            let r = evaluate(right, env)?;
+            let a = l.as_integer()?;
+            let b = r.as_integer()?;
+            if b == 0 { return Err(RuntimeError::DivisionByZero); }
+            Ok(Value::Integer(a / b))
+        }
+
+        Expression::Exponent(left, right) => {
+            let l = evaluate(left, env)?;
+            let r = evaluate(right, env)?;
+            Ok(Value::Double(l.as_double()?.powf(r.as_double()?)))
+        }
+
         Expression::Modulo(left, right) => {
             let l = evaluate(left, env)?;
             let r = evaluate(right, env)?;
@@ -236,6 +251,58 @@ pub fn evaluate(expr: &Expression, env: &Environment) -> Result<Value, RuntimeEr
             }
         }
 
+        Expression::AndAlso(left, right) => {
+            let l = evaluate(left, env)?;
+            if !l.as_bool()? {
+                return Ok(Value::Boolean(false));
+            }
+            let r = evaluate(right, env)?;
+            Ok(Value::Boolean(r.as_bool()?))
+        }
+
+        Expression::OrElse(left, right) => {
+            let l = evaluate(left, env)?;
+            if l.as_bool()? {
+                return Ok(Value::Boolean(true));
+            }
+            let r = evaluate(right, env)?;
+            Ok(Value::Boolean(r.as_bool()?))
+        }
+
+        Expression::Is(left, right) => {
+            let l = evaluate(left, env)?;
+            let r = evaluate(right, env)?;
+            let result = match (&l, &r) {
+                (Value::Nothing, Value::Nothing) => true,
+                (Value::Object(a), Value::Object(b)) => std::rc::Rc::ptr_eq(a, b),
+                _ => false,
+            };
+            Ok(Value::Boolean(result))
+        }
+
+        Expression::IsNot(left, right) => {
+            let l = evaluate(left, env)?;
+            let r = evaluate(right, env)?;
+            let result = match (&l, &r) {
+                (Value::Nothing, Value::Nothing) => false,
+                (Value::Object(a), Value::Object(b)) => !std::rc::Rc::ptr_eq(a, b),
+                _ => true,
+            };
+            Ok(Value::Boolean(result))
+        }
+
+        Expression::Like(left, right) => {
+            let l = evaluate(left, env)?;
+            let r = evaluate(right, env)?;
+            let text = l.as_string();
+            let pattern = r.as_string();
+            Ok(Value::Boolean(vb_like_match(&text, &pattern)))
+        }
+
+        Expression::TypeOf { .. } => {
+            Err(RuntimeError::Custom("TypeOf cannot be evaluated in constant expressions".to_string()))
+        }
+
         Expression::BitShiftLeft(left, right) => {
             let l = evaluate(left, env)?;
             let r = evaluate(right, env)?;
@@ -340,6 +407,79 @@ pub fn value_in_range(val: &Value, from: &Value, to: &Value) -> bool {
         _ => {
             if let (Ok(v), Ok(f), Ok(t)) = (val.as_double(), from.as_double(), to.as_double()) {
                 v >= f && v <= t
+            } else {
+                false
+            }
+        }
+    }
+}
+
+fn vb_like_match(text: &str, pattern: &str) -> bool {
+    let text_chars: Vec<char> = text.chars().collect();
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    vb_like_match_inner(&text_chars, &pattern_chars)
+}
+
+fn vb_like_match_inner(text: &[char], pattern: &[char]) -> bool {
+    if pattern.is_empty() {
+        return text.is_empty();
+    }
+    match pattern[0] {
+        '*' => {
+            for i in 0..=text.len() {
+                if vb_like_match_inner(&text[i..], &pattern[1..]) {
+                    return true;
+                }
+            }
+            false
+        }
+        '?' => {
+            if text.is_empty() { return false; }
+            vb_like_match_inner(&text[1..], &pattern[1..])
+        }
+        '#' => {
+            if text.is_empty() || !text[0].is_ascii_digit() { return false; }
+            vb_like_match_inner(&text[1..], &pattern[1..])
+        }
+        '[' => {
+            if text.is_empty() { return false; }
+            if let Some(close) = pattern.iter().position(|&c| c == ']') {
+                let inside = &pattern[1..close];
+                let (negate, chars) = if !inside.is_empty() && inside[0] == '!' {
+                    (true, &inside[1..])
+                } else {
+                    (false, inside)
+                };
+                let mut matches = false;
+                let mut i = 0;
+                while i < chars.len() {
+                    if i + 2 < chars.len() && chars[i + 1] == '-' {
+                        if text[0] >= chars[i] && text[0] <= chars[i + 2] {
+                            matches = true;
+                        }
+                        i += 3;
+                    } else {
+                        if text[0] == chars[i] {
+                            matches = true;
+                        }
+                        i += 1;
+                    }
+                }
+                if negate { matches = !matches; }
+                if matches {
+                    vb_like_match_inner(&text[1..], &pattern[close + 1..])
+                } else {
+                    false
+                }
+            } else {
+                if text.is_empty() || text[0] != '[' { return false; }
+                vb_like_match_inner(&text[1..], &pattern[1..])
+            }
+        }
+        c => {
+            if text.is_empty() { return false; }
+            if text[0].to_ascii_lowercase() == c.to_ascii_lowercase() {
+                vb_like_match_inner(&text[1..], &pattern[1..])
             } else {
                 false
             }

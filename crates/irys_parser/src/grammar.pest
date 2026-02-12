@@ -29,9 +29,14 @@ imports_statement = _{ ^"Imports" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI) }
 
 // Statements
 statement = _{
-    module_decl
+    namespace_decl
+    | module_decl
     | class_decl
+    | interface_decl
+    | structure_decl
     | enum_decl
+    | delegate_sub_decl
+    | delegate_function_decl
     | sub_decl
     | function_decl
     | const_statement
@@ -40,6 +45,7 @@ statement = _{
     | set_statement
     | dot_assign_statement
     | me_assign_statement
+    | compound_assign_statement
     | assign_statement
     | single_line_if_statement
     | if_statement
@@ -64,6 +70,7 @@ statement = _{
     | call_statement
     | addhandler_statement
     | removehandler_statement
+    | raiseevent_statement
     | expression_statement
 }
 dim_new_keyword = { ^"New" }
@@ -76,9 +83,12 @@ dim_statement = {
 
 const_statement = { visibility_modifier? ~ ^"Const" ~ identifier ~ ^"As" ~ type_name ~ "=" ~ expression }
 set_statement = { ^"Set" ~ identifier ~ "=" ~ expression }
+compound_assign_op = { "+=" | "-=" | "*=" | "/=" | "\\=" | "&=" | "^=" | "<<=" | ">>=" }
+compound_assign_statement = { identifier ~ ("." ~ identifier)* ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? ~ compound_assign_op ~ expression }
 assign_statement = { identifier ~ ("." ~ identifier)* ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? ~ "=" ~ expression }
 preserve_keyword = { ^"Preserve" }
 redim_statement = { ^"ReDim" ~ preserve_keyword? ~ identifier ~ "(" ~ array_bounds ~ ")" }
+raiseevent_statement = { ^"RaiseEvent" ~ identifier ~ ("(" ~ argument_list? ~ ")")? }
 
 // Array support
 array_bounds = { expression ~ ("," ~ expression)* }
@@ -95,6 +105,7 @@ single_line_stmt = _{
     | set_statement
     | dot_assign_statement
     | me_assign_statement
+    | compound_assign_statement
     | assign_statement
     | addhandler_statement
     | removehandler_statement
@@ -136,11 +147,13 @@ while_statement = {
 while_end = { ^"Wend" | ^"End" ~ ^"While" }
 
 do_loop_statement = {
-    ^"Do" ~ (^"While" ~ expression | ^"Until" ~ expression)? ~ (NEWLINE | EOI)
+    ^"Do" ~ (do_while_kw ~ expression | do_until_kw ~ expression)? ~ (NEWLINE | EOI)
     ~ (!do_end ~ line)*
     ~ do_end
 }
-do_end = { ^"Loop" ~ (^"While" ~ expression | ^"Until" ~ expression)? }
+do_end = { ^"Loop" ~ (do_while_kw ~ expression | do_until_kw ~ expression)? }
+do_while_kw = { ^"While" }
+do_until_kw = { ^"Until" }
 
 select_statement = {
     ^"Select" ~ ^"Case" ~ expression ~ (NEWLINE | EOI)
@@ -252,7 +265,7 @@ nullable_marker = { "?" }
 // Module declarations (VB.NET style - members are implicitly shared)
 module_decl = {
     (^"Public" | ^"Private" | ^"Friend")? ~ ^"Module" ~ identifier ~ (NEWLINE | EOI)
-    ~ (!module_end ~ (sub_decl | function_decl | const_statement_line | field_line | dim_line | class_decl | enum_decl | NEWLINE | COMMENT))*
+    ~ (!module_end ~ (sub_decl | function_decl | const_statement_line | event_line | delegate_line | field_line | dim_line | class_decl | interface_decl | structure_decl | enum_decl | NEWLINE | COMMENT))*
     ~ module_end
 }
 module_end = { ^"End" ~ ^"Module" }
@@ -268,13 +281,56 @@ class_decl = {
     attribute_line* ~
     class_modifier* ~ ^"Class" ~ identifier ~ (NEWLINE | EOI)
     ~ inherits_line?
-    ~ (!class_end ~ (property_decl | sub_decl | function_decl | field_line | dim_line | imports_statement | attribute_line | NEWLINE | COMMENT))*
+    ~ implements_line?
+    ~ (!class_end ~ (property_decl | sub_decl | function_decl | event_line | delegate_line | field_line | dim_line | enum_decl | imports_statement | attribute_line | NEWLINE | COMMENT))*
     ~ class_end
 }
 class_modifier = _{ partial_keyword | visibility_modifier }
 
 class_end = { ^"End" ~ ^"Class" }
 dim_line = _{ dim_statement ~ (NEWLINE | EOI) }
+
+// Interface declarations
+implements_statement = { ^"Implements" ~ type_name ~ ("," ~ type_name)* }
+implements_line = _{ implements_statement ~ (NEWLINE | EOI) }
+
+interface_decl = {
+    (^"Public" | ^"Private" | ^"Friend")? ~ ^"Interface" ~ identifier ~ (NEWLINE | EOI)
+    ~ inherits_line?
+    ~ (!interface_end ~ (interface_sub | interface_function | interface_property | interface_event | NEWLINE | COMMENT))*
+    ~ interface_end
+}
+interface_end = { ^"End" ~ ^"Interface" }
+interface_sub = { ^"Sub" ~ identifier ~ "(" ~ param_list? ~ ")" ~ (NEWLINE | EOI) }
+interface_function = { ^"Function" ~ identifier ~ "(" ~ param_list? ~ ")" ~ (^"As" ~ type_name)? ~ (NEWLINE | EOI) }
+interface_property = { (^"ReadOnly" | ^"WriteOnly")? ~ ^"Property" ~ identifier ~ ("(" ~ param_list? ~ ")")? ~ (^"As" ~ type_name)? ~ (NEWLINE | EOI) }
+interface_event = { ^"Event" ~ identifier ~ (^"As" ~ type_name | "(" ~ param_list? ~ ")")? ~ (NEWLINE | EOI) }
+
+// Structure declarations
+structure_decl = {
+    (^"Public" | ^"Private" | ^"Friend")? ~ ^"Structure" ~ identifier ~ (NEWLINE | EOI)
+    ~ implements_line?
+    ~ (!structure_end ~ (property_decl | sub_decl | function_decl | field_line | dim_line | NEWLINE | COMMENT))*
+    ~ structure_end
+}
+structure_end = { ^"End" ~ ^"Structure" }
+
+// Namespace blocks
+namespace_decl = {
+    ^"Namespace" ~ dotted_identifier ~ (NEWLINE | EOI)
+    ~ (!namespace_end ~ (class_decl | module_decl | interface_decl | structure_decl | enum_decl | namespace_decl | NEWLINE | COMMENT))*
+    ~ namespace_end
+}
+namespace_end = { ^"End" ~ ^"Namespace" }
+
+// Event declarations
+event_decl = { (^"Public" | ^"Private" | ^"Protected" | ^"Friend")? ~ ^"Event" ~ identifier ~ (^"As" ~ type_name | "(" ~ param_list? ~ ")")? }
+event_line = _{ event_decl ~ (NEWLINE | EOI) }
+
+// Delegate declarations
+delegate_sub_decl = { (^"Public" | ^"Private" | ^"Friend")? ~ ^"Delegate" ~ ^"Sub" ~ identifier ~ "(" ~ param_list? ~ ")" }
+delegate_function_decl = { (^"Public" | ^"Private" | ^"Friend")? ~ ^"Delegate" ~ ^"Function" ~ identifier ~ "(" ~ param_list? ~ ")" ~ (^"As" ~ type_name)? }
+delegate_line = _{ (delegate_sub_decl | delegate_function_decl) ~ (NEWLINE | EOI) }
 
 // Enum declarations
 enum_decl = {
@@ -327,11 +383,12 @@ logical_or = { logical_and ~ (or_op ~ logical_and)* }
 logical_and = { not_condition ~ (and_op ~ not_condition)* }
 not_condition = { not_op? ~ equality } // Not binds tighter than And
 equality = { comparison ~ (eq_op ~ comparison)* }
-comparison = { bit_shift ~ (comp_op ~ bit_shift)* }
+comparison = { bit_shift ~ (comp_op ~ bit_shift | like_op ~ bit_shift)* }
 bit_shift = { additive ~ (shift_op ~ additive)* }
 additive = { multiplicative ~ (add_op ~ multiplicative)* }
 multiplicative = { unary ~ (mult_op ~ unary)* }
-unary = { (await_op | neg_op)? ~ postfix }
+unary = { (await_op | neg_op)? ~ exponent }
+exponent = { postfix ~ (exp_op ~ postfix)* }
 postfix = { primary ~ member_chain* }
 
 xor_op = { ^"Xor" }
@@ -339,9 +396,11 @@ or_op = { ^"OrElse" | ^"Or" }
 and_op = { ^"AndAlso" | ^"And" }
 eq_op = { ^"=" | ^"<>" | ^"IsNot" | ^"Is" }
 comp_op = { ^"<=" | ^">=" | "<" | ">" }
+like_op = { ^"Like" }
 shift_op = { "<<" | ">>" }
 add_op = { "+" | "-" | "&" }
 mult_op = { "*" | "/" | "\\" | ^"Mod" }
+exp_op = { "^" }
 not_op = { ^"Not" } // Removed "Nothing" lookahead check, might be fragile but standard parsing should distinguish identifier vs keyword
 neg_op = { "-" }
 await_op = { ^"Await" }
@@ -363,7 +422,8 @@ mybase_assign_statement = { mybase_keyword ~ ("." ~ member_identifier)+ ~ "=" ~ 
 dotted_identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* ~ ("." ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*)* }
 
 primary = _{
-    new_expression
+    typeof_expression
+    | new_expression
     | literal
     | lambda_expression
     | if_expression
@@ -380,6 +440,9 @@ primary = _{
     | identifier
     | "(" ~ expression ~ ")"
 }
+
+// TypeOf...Is expression
+typeof_expression = { ^"TypeOf" ~ expression ~ ^"Is" ~ type_name }
 
 // Inline If expression: If(cond, true, false) or If(value, default)
 if_expression = { ^"If" ~ "(" ~ expression ~ "," ~ expression ~ ("," ~ expression)? ~ ")" }

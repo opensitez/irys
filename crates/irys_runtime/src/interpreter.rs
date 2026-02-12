@@ -2493,6 +2493,109 @@ impl Interpreter {
             Statement::ExitProperty => {
                  return Err(RuntimeError::Exit(ExitType::Property));
             }
+            Statement::CompoundAssignment { target, members, indices, operator, value } => {
+                // Get current value
+                let current = if !members.is_empty() {
+                    // Build member access expression
+                    let mut obj = Expression::Variable(target.clone());
+                    for m in members.iter() {
+                        obj = Expression::MemberAccess(Box::new(obj), m.clone());
+                    }
+                    self.evaluate_expr(&obj)?
+                } else if !indices.is_empty() {
+                    let arr_expr = Expression::ArrayAccess(target.clone(), indices.clone());
+                    self.evaluate_expr(&arr_expr)?
+                } else {
+                    self.evaluate_expr(&Expression::Variable(target.clone()))?
+                };
+
+                let rhs = self.evaluate_expr(value)?;
+                use irys_parser::ast::stmt::CompoundOp;
+                let new_val = match operator {
+                    CompoundOp::AddAssign => {
+                        match (&current, &rhs) {
+                            (Value::Integer(a), Value::Integer(b)) => Value::Integer(a + b),
+                            (Value::String(a), _) => Value::String(format!("{}{}", a, rhs.as_string())),
+                            _ => Value::Double(current.as_double()? + rhs.as_double()?),
+                        }
+                    }
+                    CompoundOp::SubtractAssign => {
+                        match (&current, &rhs) {
+                            (Value::Integer(a), Value::Integer(b)) => Value::Integer(a - b),
+                            _ => Value::Double(current.as_double()? - rhs.as_double()?),
+                        }
+                    }
+                    CompoundOp::MultiplyAssign => {
+                        match (&current, &rhs) {
+                            (Value::Integer(a), Value::Integer(b)) => Value::Integer(a * b),
+                            _ => Value::Double(current.as_double()? * rhs.as_double()?),
+                        }
+                    }
+                    CompoundOp::DivideAssign => {
+                        let a = current.as_double()?;
+                        let b = rhs.as_double()?;
+                        if b == 0.0 { return Err(RuntimeError::DivisionByZero); }
+                        Value::Double(a / b)
+                    }
+                    CompoundOp::IntDivideAssign => {
+                        let a = current.as_integer()?;
+                        let b = rhs.as_integer()?;
+                        if b == 0 { return Err(RuntimeError::DivisionByZero); }
+                        Value::Integer(a / b)
+                    }
+                    CompoundOp::ConcatAssign => {
+                        Value::String(format!("{}{}", current.as_string(), rhs.as_string()))
+                    }
+                    CompoundOp::ExponentAssign => {
+                        Value::Double(current.as_double()?.powf(rhs.as_double()?))
+                    }
+                    CompoundOp::ShiftLeftAssign => {
+                        Value::Long(current.as_long()? << rhs.as_integer()? as u32)
+                    }
+                    CompoundOp::ShiftRightAssign => {
+                        Value::Long(current.as_long()? >> rhs.as_integer()? as u32)
+                    }
+                };
+
+                // Assign back
+                if !members.is_empty() {
+                    // For member assignment, build the path
+                    let full_name = std::iter::once(target.as_str().to_string())
+                        .chain(members.iter().map(|m| m.as_str().to_string()))
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    self.env.set(&full_name, new_val)?;
+                } else if !indices.is_empty() {
+                    let idx = self.evaluate_expr(&indices[0])?.as_integer()? as usize;
+                    if let Ok(Value::Array(mut arr)) = self.env.get(target.as_str()) {
+                        if idx < arr.len() {
+                            arr[idx] = new_val.clone();
+                            self.env.set(target.as_str(), Value::Array(arr))?;
+                        }
+                    }
+                } else {
+                    self.env.set(target.as_str(), new_val)?;
+                }
+                Ok(())
+            }
+            Statement::RaiseEvent { event_name, arguments } => {
+                // RaiseEvent fires events registered via AddHandler
+                // Look up handler in the event system
+                let event_str = event_name.as_str();
+                // Try to find a handler: use current module or "Me" as context
+                let module = self.current_module.clone().unwrap_or_default();
+                // The handler is typically registered as "ControlName_EventName" 
+                // For form-level events, the control is the form itself
+                if let Some(event_type) = irys_forms::EventType::from_name(event_str) {
+                    if let Some(handler_name) = self.events.get_handler(&module, &event_type).map(|s| s.to_string()) {
+                        let args: Vec<Value> = arguments.iter()
+                            .map(|a| self.evaluate_expr(a))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        self.call_event_handler(&handler_name, &args)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 
@@ -2627,6 +2730,21 @@ impl Interpreter {
                 }
                 Ok(Value::Double(a / b))
             }
+            Expression::IntegerDivide(left, right) => {
+                let l = self.evaluate_expr(left)?;
+                let r = self.evaluate_expr(right)?;
+                let a = l.as_integer()?;
+                let b = r.as_integer()?;
+                if b == 0 {
+                    return Err(RuntimeError::DivisionByZero);
+                }
+                Ok(Value::Integer(a / b))
+            }
+            Expression::Exponent(left, right) => {
+                let l = self.evaluate_expr(left)?;
+                let r = self.evaluate_expr(right)?;
+                Ok(Value::Double(l.as_double()?.powf(r.as_double()?)))
+            }
             Expression::Concatenate(left, right) => {
                 let l = self.evaluate_expr(left)?;
                 let r = self.evaluate_expr(right)?;
@@ -2744,6 +2862,75 @@ impl Interpreter {
                         Ok(Value::Long(i_l ^ i_r))
                     }
                 }
+            }
+            Expression::AndAlso(left, right) => {
+                // Short-circuit: if left is false, don't evaluate right
+                let l = self.evaluate_expr(left)?;
+                if !l.as_bool()? {
+                    return Ok(Value::Boolean(false));
+                }
+                let r = self.evaluate_expr(right)?;
+                Ok(Value::Boolean(r.as_bool()?))
+            }
+            Expression::OrElse(left, right) => {
+                // Short-circuit: if left is true, don't evaluate right
+                let l = self.evaluate_expr(left)?;
+                if l.as_bool()? {
+                    return Ok(Value::Boolean(true));
+                }
+                let r = self.evaluate_expr(right)?;
+                Ok(Value::Boolean(r.as_bool()?))
+            }
+            Expression::Is(left, right) => {
+                // Reference equality — for Nothing comparison and object identity
+                let l = self.evaluate_expr(left)?;
+                let r = self.evaluate_expr(right)?;
+                let result = match (&l, &r) {
+                    (Value::Nothing, Value::Nothing) => true,
+                    (Value::Nothing, _) | (_, Value::Nothing) => {
+                        matches!((&l, &r), (Value::Nothing, Value::Nothing))
+                    }
+                    (Value::Object(a), Value::Object(b)) => std::ptr::eq(&*a.borrow(), &*b.borrow()),
+                    _ => l == r,
+                };
+                Ok(Value::Boolean(result))
+            }
+            Expression::IsNot(left, right) => {
+                let l = self.evaluate_expr(left)?;
+                let r = self.evaluate_expr(right)?;
+                let result = match (&l, &r) {
+                    (Value::Nothing, Value::Nothing) => false,
+                    (Value::Nothing, _) | (_, Value::Nothing) => true,
+                    (Value::Object(a), Value::Object(b)) => !std::ptr::eq(&*a.borrow(), &*b.borrow()),
+                    _ => l != r,
+                };
+                Ok(Value::Boolean(result))
+            }
+            Expression::Like(left, right) => {
+                // VB.NET Like operator — basic pattern matching with *, ?, #, [charlist]
+                let l = self.evaluate_expr(left)?;
+                let r = self.evaluate_expr(right)?;
+                let text = l.as_string();
+                let pattern = r.as_string();
+                let result = vb_like_match(&text, &pattern);
+                Ok(Value::Boolean(result))
+            }
+            Expression::TypeOf { expr, type_name } => {
+                let val = self.evaluate_expr(expr)?;
+                let result = match &val {
+                    Value::Object(obj) => {
+                        let b = obj.borrow();
+                        b.class_name.eq_ignore_ascii_case(type_name)
+                    }
+                    Value::String(_) => type_name.eq_ignore_ascii_case("String"),
+                    Value::Integer(_) => type_name.eq_ignore_ascii_case("Integer") || type_name.eq_ignore_ascii_case("Int32"),
+                    Value::Long(_) => type_name.eq_ignore_ascii_case("Long") || type_name.eq_ignore_ascii_case("Int64"),
+                    Value::Double(_) => type_name.eq_ignore_ascii_case("Double"),
+                    Value::Boolean(_) => type_name.eq_ignore_ascii_case("Boolean"),
+                    Value::Nothing => false,
+                    _ => false,
+                };
+                Ok(Value::Boolean(result))
             }
             Expression::BitShiftLeft(left, right) => {
                 let l = self.evaluate_expr(left)?;
@@ -11749,4 +11936,83 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         if chunk[3] != b'=' { result.push(triple as u8); }
     }
     Ok(result)
+}
+
+/// VB.NET Like operator pattern matching
+/// Supports: * (any chars), ? (single char), # (single digit), [charlist], [!charlist]
+fn vb_like_match(text: &str, pattern: &str) -> bool {
+    let text_chars: Vec<char> = text.chars().collect();
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    vb_like_match_inner(&text_chars, &pattern_chars)
+}
+
+fn vb_like_match_inner(text: &[char], pattern: &[char]) -> bool {
+    if pattern.is_empty() {
+        return text.is_empty();
+    }
+    match pattern[0] {
+        '*' => {
+            // Try matching rest of pattern at every position
+            for i in 0..=text.len() {
+                if vb_like_match_inner(&text[i..], &pattern[1..]) {
+                    return true;
+                }
+            }
+            false
+        }
+        '?' => {
+            if text.is_empty() { return false; }
+            vb_like_match_inner(&text[1..], &pattern[1..])
+        }
+        '#' => {
+            if text.is_empty() || !text[0].is_ascii_digit() { return false; }
+            vb_like_match_inner(&text[1..], &pattern[1..])
+        }
+        '[' => {
+            if text.is_empty() { return false; }
+            // Find closing ]
+            if let Some(close) = pattern.iter().position(|&c| c == ']') {
+                let inside = &pattern[1..close];
+                let (negate, chars) = if !inside.is_empty() && inside[0] == '!' {
+                    (true, &inside[1..])
+                } else {
+                    (false, inside)
+                };
+                let mut matches = false;
+                let mut i = 0;
+                while i < chars.len() {
+                    if i + 2 < chars.len() && chars[i + 1] == '-' {
+                        // Range: [a-z]
+                        if text[0] >= chars[i] && text[0] <= chars[i + 2] {
+                            matches = true;
+                        }
+                        i += 3;
+                    } else {
+                        if text[0] == chars[i] {
+                            matches = true;
+                        }
+                        i += 1;
+                    }
+                }
+                if negate { matches = !matches; }
+                if matches {
+                    vb_like_match_inner(&text[1..], &pattern[close + 1..])
+                } else {
+                    false
+                }
+            } else {
+                // No closing bracket — treat [ as literal
+                if text.is_empty() || text[0] != '[' { return false; }
+                vb_like_match_inner(&text[1..], &pattern[1..])
+            }
+        }
+        c => {
+            if text.is_empty() { return false; }
+            if text[0].to_ascii_lowercase() == c.to_ascii_lowercase() {
+                vb_like_match_inner(&text[1..], &pattern[1..])
+            } else {
+                false
+            }
+        }
+    }
 }
