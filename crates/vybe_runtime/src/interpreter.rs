@@ -5963,6 +5963,11 @@ impl Interpreter {
                      return val.get_array_element(index);
                  }
              }
+             if let Value::Lambda { .. } = &val {
+                 // It's a lambda/delegate call (Sub or Function lambda invoked as statement)
+                 let arg_values: Result<Vec<_>, _> = args.iter().map(|e| self.evaluate_expr(e)).collect();
+                 return self.call_lambda(val, &arg_values?);
+             }
         }
         
         // Check implicit object array/field access
@@ -14727,13 +14732,16 @@ impl Interpreter {
             }
             
             // Save current environment
-            let prev_env = self.env.clone();
+            let mut prev_env = self.env.clone();
             
             // Switch to captured environment (Snapshot)
             self.env = env.borrow().clone();
             self.env.push_scope();
             
             // Bind arguments
+            let param_names: std::collections::HashSet<String> = params.iter()
+                .map(|p| p.name.as_str().to_lowercase())
+                .collect();
             for (param, arg) in params.iter().zip(args.iter()) {
                 self.env.define(param.name.as_str(), arg.clone());
             }
@@ -14767,6 +14775,18 @@ impl Interpreter {
                     final_res
                 }
             };
+            
+            // Propagate modified closure variables back (VB.NET captures by reference)
+            // Skip lambda parameters — only propagate outer variables that the lambda modified
+            for (name, value) in self.env.all_variables() {
+                if param_names.contains(&name) { continue; }
+                // Update captured env (so future calls see changes)
+                let _ = env.borrow_mut().set(&name, value.clone());
+                // Update caller env (so caller sees changes)
+                if prev_env.get(&name).is_ok() {
+                    let _ = prev_env.set(&name, value);
+                }
+            }
             
             // Restore environment
             self.env = prev_env;

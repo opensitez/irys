@@ -170,3 +170,16 @@ impl Default for Environment {
         Self::new()
     }
 }
+
+impl Environment {
+    /// Get all variable names and values across all scopes (for closure propagation)
+    pub fn all_variables(&self) -> Vec<(String, Value)> {
+        let mut result = Vec::new();
+        for scope in &self.scopes {
+            for (name, value) in scope {
+                result.push((name.clone(), value.clone()));
+            }
+        }
+        result
+    }
+}

@@ -1954,9 +1954,10 @@ fn parse_lambda_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
     }
     
     // Check if body is a block (newline followed by lines) or a single expression/statement
+    // Note: `statement` is a silent rule (_{ }) in the grammar, so Rule::statement never appears.
+    // Instead, the specific statement variant rules (call_statement, assign_statement, etc.) appear directly.
     let body = match next_pair.as_rule() {
         Rule::expression => LambdaBody::Expression(Box::new(parse_expression(next_pair)?)),
-        Rule::statement => LambdaBody::Statement(Box::new(parse_statement(next_pair)?)),
         Rule::NEWLINE => {
             // Multiline block
             let mut body_stmts = Vec::new();
@@ -1983,7 +1984,11 @@ fn parse_lambda_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
             }
             LambdaBody::Block(body_stmts)
         }
-        _ => return Err(ParseError::UnexpectedRule(next_pair.as_rule())),
+        _ => {
+            // Any statement variant rule (call_statement, assign_statement, etc.)
+            // These appear directly because `statement` is a silent rule in the grammar.
+            LambdaBody::Statement(Box::new(parse_statement(next_pair)?))
+        }
     };
 
     Ok(Expression::Lambda {
