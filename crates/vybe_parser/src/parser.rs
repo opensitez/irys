@@ -1941,7 +1941,7 @@ fn parse_continue_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
 
 fn parse_lambda_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
     let text = pair.as_str().trim_start();
-    let is_function = text.to_lowercase().starts_with("function");
+    let _is_function = text.to_lowercase().starts_with("function");
     
     let mut inner = pair.into_inner();
     let mut params = Vec::new();
@@ -1953,17 +1953,52 @@ fn parse_lambda_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
         next_pair = inner.next().ok_or_else(|| ParseError::Custom("Lambda missing body".to_string()))?;
     }
     
-    if is_function {
-        Ok(Expression::Lambda {
-            params,
-            body: Box::new(LambdaBody::Expression(Box::new(parse_expression(next_pair)?)))
-        })
-    } else {
-        Ok(Expression::Lambda {
-            params,
-            body: Box::new(LambdaBody::Statement(Box::new(parse_statement(next_pair)?)))
-        })
-    }
+    // Check if body is a block (newline followed by lines) or a single expression/statement
+    let body = match next_pair.as_rule() {
+        Rule::expression => LambdaBody::Expression(Box::new(parse_expression(next_pair)?)),
+        Rule::statement => LambdaBody::Statement(Box::new(parse_statement(next_pair)?)),
+        Rule::NEWLINE => {
+            // Multiline block
+            let mut body_stmts = Vec::new();
+            for line_pair in inner {
+                match line_pair.as_rule() {
+                    Rule::line => {
+                        // Line can contain declarations or statements
+                        if let Some(inner_pair) = line_pair.into_inner().next() {
+                            match inner_pair.as_rule() {
+                                Rule::statement_line => {
+                                    for stmt_pair in inner_pair.into_inner() {
+                                        if stmt_pair.as_rule() != Rule::NEWLINE && stmt_pair.as_rule() != Rule::EOI {
+                                            body_stmts.push(parse_statement(stmt_pair)?);
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    if let Some(decl) = try_parse_declaration(inner_pair.clone())? {
+                                        // Wrap declaration in a statement if needed, or handle separately
+                                        // For now, lambdas usually contain statements.
+                                        match decl {
+                                            Declaration::Variable(v) => body_stmts.push(Statement::Dim(v)),
+                                            Declaration::Constant(c) => body_stmts.push(Statement::Const(c)),
+                                            _ => {} // Ignore other decls for now
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            LambdaBody::Block(body_stmts)
+        }
+        _ => return Err(ParseError::UnexpectedRule(next_pair.as_rule())),
+    };
+
+    Ok(Expression::Lambda {
+        params,
+        body: Box::new(body),
+    })
 }
 
 fn parse_block_body(pair: Pair<Rule>) -> ParseResult<Vec<Statement>> {

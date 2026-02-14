@@ -188,7 +188,7 @@ impl Interpreter {
 
         // Create System namespace object
         let mut system_fields = HashMap::new();
-        system_fields.insert("io".to_string(), io_obj);
+        system_fields.insert("io".to_string(), io_obj.clone());
         system_fields.insert("console".to_string(), console_obj.clone());
         system_fields.insert("math".to_string(), math_obj.clone());
         // System.DBNull
@@ -199,14 +199,67 @@ impl Interpreter {
         })));
         system_fields.insert("dbnull".to_string(), dbnull_obj.clone());
         
+        // System.BitConverter
+        let bit_converter_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "BitConverter".to_string(),
+            fields: HashMap::new(),
+        })));
+        system_fields.insert("bitconverter".to_string(), bit_converter_obj);
+        
+        // Create System.Text.Encoding.UTF8 object
+        let utf8_obj_data = ObjectData {
+            class_name: "Utf8Encoding".to_string(),
+            fields: HashMap::new(),
+        };
+        let utf8_obj = Value::Object(Rc::new(RefCell::new(utf8_obj_data)));
+
+        let mut text_fields = HashMap::new();
+        let mut encoding_fields = HashMap::new();
+        encoding_fields.insert("utf8".to_string(), utf8_obj);
+        let encoding_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "Namespace".to_string(), fields: encoding_fields,
+        })));
+        text_fields.insert("encoding".to_string(), encoding_obj.clone());
+        let text_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "Namespace".to_string(), fields: text_fields,
+        })));
+        // Create System.Security.Cryptography objects
+        let md5_class_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "MD5".to_string(), fields: HashMap::new(),
+        })));
+        let sha256_class_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "SHA256".to_string(), fields: HashMap::new(),
+        })));
+        
+        let mut crypto_fields = HashMap::new();
+        crypto_fields.insert("md5".to_string(), md5_class_obj.clone());
+        crypto_fields.insert("sha256".to_string(), sha256_class_obj.clone());
+        let crypto_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "Namespace".to_string(), fields: crypto_fields,
+        })));
+        
+        let mut security_fields = HashMap::new();
+        security_fields.insert("cryptography".to_string(), crypto_obj.clone());
+        let security_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "Namespace".to_string(), fields: security_fields,
+        })));
+        system_fields.insert("security".to_string(), security_obj.clone());
+        
+        system_fields.insert("text".to_string(), text_obj.clone());
+        
         let system_obj_data = ObjectData {
             class_name: "Namespace".to_string(),
             fields: system_fields,
         };
         let system_obj = Value::Object(Rc::new(RefCell::new(system_obj_data)));
 
-        // Register "System" in env
-        self.env.define("system", system_obj);
+        // Register all nested namespaces in the environment for easy resolution by Imports
+        self.env.define("system", system_obj.clone());
+        self.env.define("system.io", io_obj.clone());
+        self.env.define("system.text", text_obj.clone());
+        self.env.define("system.text.encoding", encoding_obj.clone());
+        self.env.define("system.security", security_obj.clone());
+        self.env.define("system.security.cryptography", crypto_obj.clone());
         
         // Also register Console and Math globally for convenience (like implicit Imports System)
         self.env.define("console", console_obj);
@@ -5692,6 +5745,12 @@ impl Interpreter {
                                 return Ok(val);
                             }
                         }
+                    } else {
+                        // Unqualified import: `Imports System.Text` -> `Encoding` resolves to `System.Text.Encoding`
+                        let key = format!("{}.{}", imp.path, var_name).to_lowercase();
+                        if let Ok(val) = self.env.get(&key) {
+                            return Ok(val);
+                        }
                     }
                 }
 
@@ -9994,6 +10053,27 @@ impl Interpreter {
                     return self.dispatch_console_method(&method_name, &arg_values);
                 } else if class_name_lower == "system.math" {
                     return self.dispatch_math_method(&method_name, &arg_values);
+                } else if class_name_lower == "utf8encoding" {
+                    if method_name == "getbytes" {
+                        let s = arg_values.first().map(|v| v.as_string()).unwrap_or_default();
+                        let bytes = s.into_bytes();
+                        let value_bytes: Vec<Value> = bytes.into_iter().map(Value::Byte).collect();
+                        return Ok(Value::Array(value_bytes));
+                    }
+                } else if class_name_lower == "bitconverter" {
+                    if method_name == "tostring" {
+                        let input = &arg_values[0];
+                        let bytes: Vec<u8> = match input {
+                            Value::Array(arr) => arr.iter().map(|v| match v {
+                                Value::Byte(b) => *b,
+                                Value::Integer(i) => *i as u8,
+                                _ => 0u8,
+                            }).collect(),
+                            _ => vec![],
+                        };
+                        let hex: Vec<String> = bytes.iter().map(|b| format!("{:02X}", b)).collect();
+                        return Ok(Value::String(hex.join("-")));
+                    }
                 } else if class_name_lower == "md5" {
                     if method_name == "computehash" {
                         return crate::builtins::cryptography_fns::md5_hash_fn(&arg_values);
@@ -13833,6 +13913,12 @@ impl Interpreter {
                 }
                 vybe_parser::ast::expr::LambdaBody::Statement(stmt) => {
                     self.execute(stmt)?;
+                    Ok(Value::Nothing)
+                }
+                vybe_parser::ast::expr::LambdaBody::Block(stmts) => {
+                    for stmt in stmts {
+                        self.execute(stmt)?;
+                    }
                     Ok(Value::Nothing)
                 }
             };

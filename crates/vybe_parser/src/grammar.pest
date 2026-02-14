@@ -405,8 +405,8 @@ set_end = { ^"End" ~ ^"Set" }
 
 // Lambda Expressions
 lambda_expression = {
-    (^"Function" ~ "(" ~ param_list? ~ ")" ~ expression)
-    | (^"Sub" ~ "(" ~ param_list? ~ ")" ~ statement)
+    (^"Function" ~ "(" ~ param_list? ~ ")" ~ (expression | (NEWLINE | EOI) ~ (!func_end ~ line)* ~ func_end))
+    | (^"Sub" ~ "(" ~ param_list? ~ ")" ~ (statement | (NEWLINE | EOI) ~ (!sub_end ~ line)* ~ sub_end))
 }
 
 expression = { logical_xor }

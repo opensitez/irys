@@ -177,4 +177,5 @@ pub enum BinaryOp {
 pub enum LambdaBody {
     Expression(Box<Expression>),
     Statement(Box<super::stmt::Statement>),
+    Block(Vec<super::stmt::Statement>),
 }
