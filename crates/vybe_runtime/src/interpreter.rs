@@ -3198,6 +3198,19 @@ impl Interpreter {
                            let key = self.evaluate_expr(&args[0])?;
                            return dict.borrow().item(&key);
                        }
+                       Value::Collection(col) => {
+                           // Collection access via Call syntax (e.g. col("key") or col(0))
+                           if args.len() == 1 {
+                               let idx_val = self.evaluate_expr(&args[0])?;
+                               return match &idx_val {
+                                   Value::String(key) => col.borrow().item_by_key(key),
+                                   _ => {
+                                       let idx = idx_val.as_integer()? as usize;
+                                       col.borrow().item(idx)
+                                   }
+                               };
+                           }
+                       }
                        _ => {} // Not a callable value, proceed to function lookup
                    }
                 }
@@ -3257,8 +3270,18 @@ impl Interpreter {
                         }
                     }
                     Value::Collection(col) => {
-                        let index = self.evaluate_expr(&indices[0])?.as_integer()? as usize;
-                        col.borrow().item(index)
+                        let idx_val = self.evaluate_expr(&indices[0])?;
+                        match &idx_val {
+                            Value::String(key) => {
+                                col.borrow().item_by_key(key)
+                            }
+                            _ => {
+                                // VB.NET Collection is 1-based, but ArrayList is 0-based.
+                                // We use 0-based here since our Collection wraps ArrayList.
+                                let index = idx_val.as_integer()? as usize;
+                                col.borrow().item(index)
+                            }
+                        }
                     }
                     Value::Dictionary(dict) => {
                         if indices.len() != 1 {
@@ -4234,7 +4257,8 @@ impl Interpreter {
                     return Ok(Value::Nothing);
                 }
 
-                if class_name == "system.collections.arraylist" || class_name == "arraylist" {
+                if class_name == "system.collections.arraylist" || class_name == "arraylist"
+                    || class_name == "collection" || class_name == "system.collections.collection" {
                     return Ok(Value::Collection(std::rc::Rc::new(std::cell::RefCell::new(crate::collections::ArrayList::new()))));
                 }
                 
@@ -5603,8 +5627,12 @@ impl Interpreter {
                         }
                         
                         // 1. Check if it's a field in the map (case-insensitive)
-                        if let Some(val) = obj_data.fields.get(&member.as_str().to_lowercase()) {
-                            return Ok(val.clone());
+                        // Skip "controls" — it has a dedicated dynamic accessor below
+                        let member_lc = member.as_str().to_lowercase();
+                        if member_lc != "controls" {
+                            if let Some(val) = obj_data.fields.get(&member_lc) {
+                                return Ok(val.clone());
+                            }
                         }
                     } // Drop borrow
 
@@ -5672,14 +5700,38 @@ impl Interpreter {
 
                     match member_lower.as_str() {
                         "controls" => {
-                            // Return a Controls collection proxy — allows Controls.Add/Count
+                            // Build the controls collection dynamically from all __is_control fields
                             let b = obj_ref.borrow();
-                            if let Some(coll) = b.fields.get("__controls") {
-                                return Ok(coll.clone());
+                            let mut ctrl_items = Vec::new();
+                            for (_key, val) in &b.fields {
+                                if let Value::Object(child_ref) = val {
+                                    let child_b = child_ref.borrow();
+                                    let is_ctrl = child_b.fields.get("__is_control")
+                                        .map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
+                                    if is_ctrl {
+                                        drop(child_b);
+                                        ctrl_items.push(val.clone());
+                                    }
+                                }
+                            }
+                            // Also include any dynamically-added controls from __controls
+                            if let Some(Value::Collection(existing)) = b.fields.get("__controls") {
+                                for item in &existing.borrow().items {
+                                    // Avoid duplicates: only add if not already in ctrl_items
+                                    let already = ctrl_items.iter().any(|ci| {
+                                        if let (Value::Object(a), Value::Object(b)) = (ci, item) {
+                                            std::rc::Rc::ptr_eq(a, b)
+                                        } else { false }
+                                    });
+                                    if !already {
+                                        ctrl_items.push(item.clone());
+                                    }
+                                }
                             }
                             drop(b);
-                            let coll = Value::Collection(std::rc::Rc::new(std::cell::RefCell::new(crate::collections::ArrayList::new())));
-                            obj_ref.borrow_mut().fields.insert("__controls".to_string(), coll.clone());
+                            let coll = Value::Collection(std::rc::Rc::new(std::cell::RefCell::new(
+                                crate::collections::ArrayList { items: ctrl_items, keys: std::collections::HashMap::new() }
+                            )));
                             return Ok(coll);
                         }
                         "components" => return Ok(Value::Nothing),
@@ -6520,15 +6572,69 @@ impl Interpreter {
             _ => {}
         }
 
-        // Handle Controls.Add — add control dynamically to the running form
-        if method_name == "add" {
-            if let Expression::MemberAccess(_, member) = obj {
-                if member.as_str().eq_ignore_ascii_case("Controls") {
-                    // Evaluate the argument to get the control object
-                    if !args.is_empty() {
-                        let ctrl_val = self.evaluate_expr(&args[0])?;
-                        match &ctrl_val {
-                            Value::Object(ctrl_obj) => {
+        // Handle Me.Controls("Button1") default indexer — MethodCall(Me, "Controls", ["Button1"])
+        if method_name == "controls" && !args.is_empty() {
+            // Build the Controls collection from the parent object, then index by string key or integer
+            let parent_val = self.evaluate_expr(obj)?;
+            if let Value::Object(parent_ref) = &parent_val {
+                // Build the controls list dynamically
+                let pb = parent_ref.borrow();
+                let mut controls: Vec<Value> = Vec::new();
+                for (_, v) in &pb.fields {
+                    if let Value::Object(child) = v {
+                        let is_ctrl = child.borrow().fields.get("__is_control")
+                            .map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
+                        if is_ctrl {
+                            controls.push(v.clone());
+                        }
+                    }
+                }
+                if let Some(Value::Collection(coll)) = pb.fields.get("__controls") {
+                    for item in &coll.borrow().items {
+                        controls.push(item.clone());
+                    }
+                }
+                drop(pb);
+
+                let idx_val = self.evaluate_expr(&args[0])?;
+                match &idx_val {
+                    Value::String(key) => {
+                        // Search by name
+                        for ctrl in &controls {
+                            if let Value::Object(o) = ctrl {
+                                let matches = o.borrow().fields.get("name")
+                                    .map(|v| v.as_string().eq_ignore_ascii_case(key))
+                                    .unwrap_or(false);
+                                if matches {
+                                    return Ok(ctrl.clone());
+                                }
+                            }
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    Value::Integer(i) => {
+                        let idx = *i as usize;
+                        return Ok(controls.get(idx).cloned().unwrap_or(Value::Nothing));
+                    }
+                    _ => {
+                        if let Ok(i) = idx_val.as_integer() {
+                            let idx = i as usize;
+                            return Ok(controls.get(idx).cloned().unwrap_or(Value::Nothing));
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                }
+            }
+        }
+
+        // Handle Controls.* methods — full ControlCollection API
+        if let Expression::MemberAccess(parent_expr, member) = obj {
+            if member.as_str().eq_ignore_ascii_case("Controls") {
+                match method_name.as_str() {
+                    "add" => {
+                        if !args.is_empty() {
+                            let ctrl_val = self.evaluate_expr(&args[0])?;
+                            if let Value::Object(ctrl_obj) = &ctrl_val {
                                 let b = ctrl_obj.borrow();
                                 let ctrl_type = b.fields.get("__type").map(|v| v.as_string()).unwrap_or_default();
                                 let ctrl_name = b.fields.get("name").map(|v| v.as_string()).unwrap_or_default();
@@ -6536,22 +6642,291 @@ impl Interpreter {
                                 let top = b.fields.get("top").and_then(|v| v.as_integer().ok()).unwrap_or(0);
                                 let width = b.fields.get("width").and_then(|v| v.as_integer().ok()).unwrap_or(100);
                                 let height = b.fields.get("height").and_then(|v| v.as_integer().ok()).unwrap_or(30);
+                                drop(b);
                                 if !ctrl_name.is_empty() {
                                     self.side_effects.push_back(crate::RuntimeSideEffect::AddControl {
-                                        form_name: String::new(), // empty = current form
-                                        control_name: ctrl_name,
+                                        form_name: String::new(),
+                                        control_name: ctrl_name.clone(),
                                         control_type: ctrl_type,
                                         left, top, width, height,
                                     });
                                 }
+                                // Also store the control as a field on the parent for Controls iteration
+                                if let Ok(parent_val) = self.evaluate_expr(parent_expr) {
+                                    if let Value::Object(parent_ref) = &parent_val {
+                                        let mut pb = parent_ref.borrow_mut();
+                                        // Store as named field so Controls accessor finds it
+                                        if !ctrl_name.is_empty() {
+                                            pb.fields.insert(ctrl_name.to_lowercase(), ctrl_val.clone());
+                                        }
+                                        // Also track in __controls for dynamically added controls
+                                        if let Some(Value::Collection(coll)) = pb.fields.get("__controls") {
+                                            coll.borrow_mut().items.push(ctrl_val.clone());
+                                        } else {
+                                            let mut al = crate::collections::ArrayList::new();
+                                            al.items.push(ctrl_val.clone());
+                                            pb.fields.insert("__controls".to_string(),
+                                                Value::Collection(std::rc::Rc::new(std::cell::RefCell::new(al))));
+                                        }
+                                    }
+                                }
                             }
-                            Value::String(_proxy_name) => {
-                                // Legacy string proxy fallback — just a no-op
-                            }
-                            _ => {}
                         }
+                        return Ok(Value::Nothing);
                     }
-                    return Ok(Value::Nothing);
+                    "addrange" => {
+                        // Controls.AddRange(controls()) — add multiple controls
+                        if !args.is_empty() {
+                            let val = self.evaluate_expr(&args[0])?;
+                            let items = match val {
+                                Value::Array(arr) => arr,
+                                Value::Collection(c) => c.borrow().items.clone(),
+                                _ => vec![val],
+                            };
+                            for ctrl_val in items {
+                                if let Value::Object(ctrl_obj) = &ctrl_val {
+                                    let b = ctrl_obj.borrow();
+                                    let ctrl_type = b.fields.get("__type").map(|v| v.as_string()).unwrap_or_default();
+                                    let ctrl_name = b.fields.get("name").map(|v| v.as_string()).unwrap_or_default();
+                                    let left = b.fields.get("left").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let top = b.fields.get("top").and_then(|v| v.as_integer().ok()).unwrap_or(0);
+                                    let width = b.fields.get("width").and_then(|v| v.as_integer().ok()).unwrap_or(100);
+                                    let height = b.fields.get("height").and_then(|v| v.as_integer().ok()).unwrap_or(30);
+                                    drop(b);
+                                    if !ctrl_name.is_empty() {
+                                        self.side_effects.push_back(crate::RuntimeSideEffect::AddControl {
+                                            form_name: String::new(),
+                                            control_name: ctrl_name.clone(),
+                                            control_type: ctrl_type,
+                                            left, top, width, height,
+                                        });
+                                    }
+                                    if let Ok(parent_val) = self.evaluate_expr(parent_expr) {
+                                        if let Value::Object(parent_ref) = &parent_val {
+                                            let mut pb = parent_ref.borrow_mut();
+                                            if !ctrl_name.is_empty() {
+                                                pb.fields.insert(ctrl_name.to_lowercase(), ctrl_val.clone());
+                                            }
+                                            if let Some(Value::Collection(coll)) = pb.fields.get("__controls") {
+                                                coll.borrow_mut().items.push(ctrl_val.clone());
+                                            } else {
+                                                let mut al = crate::collections::ArrayList::new();
+                                                al.items.push(ctrl_val.clone());
+                                                pb.fields.insert("__controls".to_string(),
+                                                    Value::Collection(std::rc::Rc::new(std::cell::RefCell::new(al))));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "clear" => {
+                        // Controls.Clear() — remove all controls
+                        if let Ok(parent_val) = self.evaluate_expr(parent_expr) {
+                            if let Value::Object(parent_ref) = &parent_val {
+                                let mut pb = parent_ref.borrow_mut();
+                                // Remove all __is_control fields
+                                let ctrl_keys: Vec<String> = pb.fields.iter()
+                                    .filter(|(_, v)| {
+                                        if let Value::Object(o) = v {
+                                            o.borrow().fields.get("__is_control")
+                                                .map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false)
+                                        } else { false }
+                                    })
+                                    .map(|(k, _)| k.clone())
+                                    .collect();
+                                for key in &ctrl_keys {
+                                    // Emit property change to hide from UI
+                                    if let Some(Value::Object(ctrl_ref)) = pb.fields.get(key) {
+                                        let ctrl_name = ctrl_ref.borrow().fields.get("name")
+                                            .map(|v| v.as_string()).unwrap_or_default();
+                                        if !ctrl_name.is_empty() {
+                                            self.side_effects.push_back(crate::RuntimeSideEffect::PropertyChange {
+                                                object: ctrl_name,
+                                                property: "Visible".to_string(),
+                                                value: Value::Boolean(false),
+                                            });
+                                        }
+                                    }
+                                    pb.fields.remove(key);
+                                }
+                                // Clear __controls too
+                                if let Some(Value::Collection(coll)) = pb.fields.get("__controls") {
+                                    coll.borrow_mut().clear();
+                                }
+                            }
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "remove" => {
+                        // Controls.Remove(ctrl) — remove a specific control
+                        if !args.is_empty() {
+                            let ctrl_val = self.evaluate_expr(&args[0])?;
+                            if let Value::Object(ctrl_obj) = &ctrl_val {
+                                let ctrl_name = ctrl_obj.borrow().fields.get("name")
+                                    .map(|v| v.as_string()).unwrap_or_default();
+                                if !ctrl_name.is_empty() {
+                                    self.side_effects.push_back(crate::RuntimeSideEffect::PropertyChange {
+                                        object: ctrl_name.clone(),
+                                        property: "Visible".to_string(),
+                                        value: Value::Boolean(false),
+                                    });
+                                    if let Ok(parent_val) = self.evaluate_expr(parent_expr) {
+                                        if let Value::Object(parent_ref) = &parent_val {
+                                            parent_ref.borrow_mut().fields.remove(&ctrl_name.to_lowercase());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "removeat" => {
+                        // Controls.RemoveAt(index) — remove by index
+                        if !args.is_empty() {
+                            let idx = self.evaluate_expr(&args[0])?.as_integer()? as usize;
+                            // Get the controls list, find the control at index, remove it
+                            let controls_val = self.evaluate_expr(&Expression::MemberAccess(
+                                parent_expr.clone(), member.clone()))?;
+                            if let Value::Collection(coll) = &controls_val {
+                                let items = coll.borrow().items.clone();
+                                if idx < items.len() {
+                                    if let Value::Object(ctrl_obj) = &items[idx] {
+                                        let ctrl_name = ctrl_obj.borrow().fields.get("name")
+                                            .map(|v| v.as_string()).unwrap_or_default();
+                                        if !ctrl_name.is_empty() {
+                                            self.side_effects.push_back(crate::RuntimeSideEffect::PropertyChange {
+                                                object: ctrl_name.clone(),
+                                                property: "Visible".to_string(),
+                                                value: Value::Boolean(false),
+                                            });
+                                            if let Ok(parent_val) = self.evaluate_expr(parent_expr) {
+                                                if let Value::Object(parent_ref) = &parent_val {
+                                                    parent_ref.borrow_mut().fields.remove(&ctrl_name.to_lowercase());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "removebykey" => {
+                        // Controls.RemoveByKey(key) — remove by Name string
+                        if !args.is_empty() {
+                            let key = self.evaluate_expr(&args[0])?.as_string();
+                            self.side_effects.push_back(crate::RuntimeSideEffect::PropertyChange {
+                                object: key.clone(),
+                                property: "Visible".to_string(),
+                                value: Value::Boolean(false),
+                            });
+                            if let Ok(parent_val) = self.evaluate_expr(parent_expr) {
+                                if let Value::Object(parent_ref) = &parent_val {
+                                    parent_ref.borrow_mut().fields.remove(&key.to_lowercase());
+                                }
+                            }
+                        }
+                        return Ok(Value::Nothing);
+                    }
+                    "containskey" => {
+                        // Controls.ContainsKey(key) — check if a control with that name exists
+                        if !args.is_empty() {
+                            let key = self.evaluate_expr(&args[0])?.as_string();
+                            let controls_val = self.evaluate_expr(&Expression::MemberAccess(
+                                parent_expr.clone(), member.clone()))?;
+                            if let Value::Collection(coll) = &controls_val {
+                                let found = coll.borrow().items.iter().any(|item| {
+                                    if let Value::Object(o) = item {
+                                        o.borrow().fields.get("name")
+                                            .map(|v| v.as_string().eq_ignore_ascii_case(&key))
+                                            .unwrap_or(false)
+                                    } else { false }
+                                });
+                                return Ok(Value::Boolean(found));
+                            }
+                        }
+                        return Ok(Value::Boolean(false));
+                    }
+                    "find" => {
+                        // Controls.Find(key, searchAllChildren) — find controls by name
+                        if !args.is_empty() {
+                            let key = self.evaluate_expr(&args[0])?.as_string();
+                            let _search_all = if args.len() > 1 {
+                                self.evaluate_expr(&args[1])?.as_bool().unwrap_or(false)
+                            } else { false };
+                            let controls_val = self.evaluate_expr(&Expression::MemberAccess(
+                                parent_expr.clone(), member.clone()))?;
+                            let mut result = Vec::new();
+                            if let Value::Collection(coll) = &controls_val {
+                                for item in &coll.borrow().items {
+                                    if let Value::Object(o) = item {
+                                        let matches = o.borrow().fields.get("name")
+                                            .map(|v| v.as_string().eq_ignore_ascii_case(&key))
+                                            .unwrap_or(false);
+                                        if matches {
+                                            result.push(item.clone());
+                                        }
+                                    }
+                                }
+                            }
+                            return Ok(Value::Array(result));
+                        }
+                        return Ok(Value::Array(Vec::new()));
+                    }
+                    "indexofkey" => {
+                        // Controls.IndexOfKey(key) — find index of control by name
+                        if !args.is_empty() {
+                            let key = self.evaluate_expr(&args[0])?.as_string();
+                            let controls_val = self.evaluate_expr(&Expression::MemberAccess(
+                                parent_expr.clone(), member.clone()))?;
+                            if let Value::Collection(coll) = &controls_val {
+                                for (i, item) in coll.borrow().items.iter().enumerate() {
+                                    if let Value::Object(o) = item {
+                                        let matches = o.borrow().fields.get("name")
+                                            .map(|v| v.as_string().eq_ignore_ascii_case(&key))
+                                            .unwrap_or(false);
+                                        if matches {
+                                            return Ok(Value::Integer(i as i32));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return Ok(Value::Integer(-1));
+                    }
+                    "contains" => {
+                        // Controls.Contains(ctrl) — check if collection contains this control ref
+                        if !args.is_empty() {
+                            let ctrl_val = self.evaluate_expr(&args[0])?;
+                            let controls_val = self.evaluate_expr(&Expression::MemberAccess(
+                                parent_expr.clone(), member.clone()))?;
+                            if let Value::Collection(coll) = &controls_val {
+                                if let Value::Object(target) = &ctrl_val {
+                                    let found = coll.borrow().items.iter().any(|item| {
+                                        if let Value::Object(o) = item {
+                                            std::rc::Rc::ptr_eq(o, target)
+                                        } else { false }
+                                    });
+                                    return Ok(Value::Boolean(found));
+                                }
+                            }
+                        }
+                        return Ok(Value::Boolean(false));
+                    }
+                    "count" => {
+                        let controls_val = self.evaluate_expr(&Expression::MemberAccess(
+                            parent_expr.clone(), member.clone()))?;
+                        if let Value::Collection(coll) = &controls_val {
+                            return Ok(Value::Integer(coll.borrow().items.len() as i32));
+                        }
+                        return Ok(Value::Integer(0));
+                    }
+                    _ => {
+                        // Fall through for any other methods — let generic Collection dispatch handle
+                    }
                 }
             }
         }
@@ -9779,12 +10154,41 @@ impl Interpreter {
             if let Value::Collection(col_rc) = &obj_val {
                  match method_name.as_str() {
                     "add" => {
+                        // VB.NET Collection.Add(item [, key [, before | after]])
                         let val = self.evaluate_expr(&args[0])?;
-                        let idx = col_rc.borrow_mut().add(val);
-                        return Ok(Value::Integer(idx));
+                        if args.len() >= 2 {
+                            let key_val = self.evaluate_expr(&args[1])?;
+                            let key_str = key_val.as_string();
+                            if args.len() >= 3 {
+                                // before or after parameter
+                                let pos_val = self.evaluate_expr(&args[2])?;
+                                let pos = pos_val.as_integer()? as usize;
+                                // If 4th arg exists, it's "after", otherwise 3rd is "before"
+                                if args.len() >= 4 {
+                                    let after_val = self.evaluate_expr(&args[3])?;
+                                    let after_pos = after_val.as_integer()? as usize;
+                                    col_rc.borrow_mut().add_with_key_position(val, Some(&key_str), None, Some(after_pos))?;
+                                } else {
+                                    col_rc.borrow_mut().add_with_key_position(val, Some(&key_str), Some(pos), None)?;
+                                }
+                            } else {
+                                col_rc.borrow_mut().add_with_key(val, &key_str)?;
+                            }
+                        } else {
+                            col_rc.borrow_mut().add(val);
+                        }
+                        return Ok(Value::Nothing);
                     }
                     "remove" => {
                         let val = self.evaluate_expr(&args[0])?;
+                        // If the argument is a string and it matches a key, remove by key
+                        if let Value::String(key) = &val {
+                            if col_rc.borrow().contains_key(key) {
+                                col_rc.borrow_mut().remove_by_key(key)?;
+                                return Ok(Value::Nothing);
+                            }
+                        }
+                        // Otherwise remove by value (ArrayList semantics)
                         col_rc.borrow_mut().remove(&val);
                         return Ok(Value::Nothing);
                     }
@@ -9797,9 +10201,21 @@ impl Interpreter {
                         col_rc.borrow_mut().clear();
                         return Ok(Value::Nothing);
                     }
-                     "item" => {
-                         let idx = self.evaluate_expr(&args[0])?.as_integer()? as usize;
-                         return col_rc.borrow().item(idx);
+                    "item" => {
+                        let idx_val = self.evaluate_expr(&args[0])?;
+                        match &idx_val {
+                            Value::String(key) => {
+                                return col_rc.borrow().item_by_key(key);
+                            }
+                            _ => {
+                                let idx = idx_val.as_integer()? as usize;
+                                return col_rc.borrow().item(idx);
+                            }
+                        }
+                    }
+                    "containskey" => {
+                        let key = self.evaluate_expr(&args[0])?.as_string();
+                        return Ok(Value::Boolean(col_rc.borrow().contains_key(&key)));
                     }
                     "count" => {
                         return Ok(Value::Integer(col_rc.borrow().count()));
@@ -12053,7 +12469,7 @@ impl Interpreter {
                     }
                     // .ToList() — returns Collection/ArrayList
                     "tolist" => {
-                        let al = crate::collections::ArrayList { items };
+                        let al = crate::collections::ArrayList { items, keys: std::collections::HashMap::new() };
                         return Ok(Value::Collection(std::rc::Rc::new(std::cell::RefCell::new(al))));
                     }
                     // .ToArray()

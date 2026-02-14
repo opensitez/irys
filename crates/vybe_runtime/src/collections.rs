@@ -1,18 +1,22 @@
 use crate::value::{Value, RuntimeError};
 use std::collections::VecDeque;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
-// ArrayList  (already existed)
+// ArrayList  — also serves as VB.NET Collection (with optional string keys)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrayList {
     pub items: Vec<Value>,
+    /// Optional key→index mapping for VB.NET Collection-style keyed access.
+    /// Keys are stored lower-cased for case-insensitive lookup.
+    pub keys: HashMap<String, usize>,
 }
 
 impl ArrayList {
     pub fn new() -> Self {
-        Self { items: Vec::new() }
+        Self { items: Vec::new(), keys: HashMap::new() }
     }
 
     pub fn add(&mut self, value: Value) -> i32 {
@@ -20,23 +24,110 @@ impl ArrayList {
         (self.items.len() - 1) as i32
     }
 
+    /// VB.NET Collection.Add(item, key) — add with a string key
+    pub fn add_with_key(&mut self, value: Value, key: &str) -> Result<i32, RuntimeError> {
+        let key_lower = key.to_lowercase();
+        if self.keys.contains_key(&key_lower) {
+            return Err(RuntimeError::Custom(format!(
+                "Argument 'Key' is not valid. Duplicate key: '{}'", key
+            )));
+        }
+        let idx = self.items.len();
+        self.items.push(value);
+        self.keys.insert(key_lower, idx);
+        Ok(idx as i32)
+    }
+
+    /// VB.NET Collection.Add(item, key, before, after) — full signature
+    pub fn add_with_key_position(&mut self, value: Value, key: Option<&str>, before: Option<usize>, after: Option<usize>) -> Result<i32, RuntimeError> {
+        let insert_pos = if let Some(b) = before {
+            // VB.NET Collection is 1-based for before/after
+            if b == 0 || b > self.items.len() + 1 {
+                return Err(RuntimeError::Custom(format!("Argument 'Before' out of range: {}", b)));
+            }
+            b - 1
+        } else if let Some(a) = after {
+            if a == 0 || a > self.items.len() {
+                return Err(RuntimeError::Custom(format!("Argument 'After' out of range: {}", a)));
+            }
+            a // after is 1-based, so insert at position = after
+        } else {
+            self.items.len()
+        };
+
+        if let Some(k) = key {
+            let key_lower = k.to_lowercase();
+            if self.keys.contains_key(&key_lower) {
+                return Err(RuntimeError::Custom(format!(
+                    "Argument 'Key' is not valid. Duplicate key: '{}'", k
+                )));
+            }
+            // Shift existing key indices that are >= insert_pos
+            for v in self.keys.values_mut() {
+                if *v >= insert_pos {
+                    *v += 1;
+                }
+            }
+            self.keys.insert(key_lower, insert_pos);
+        } else {
+            // Still shift existing keys
+            for v in self.keys.values_mut() {
+                if *v >= insert_pos {
+                    *v += 1;
+                }
+            }
+        }
+
+        self.items.insert(insert_pos, value);
+        Ok(insert_pos as i32)
+    }
+
     pub fn remove(&mut self, value: &Value) {
         if let Some(pos) = self.items.iter().position(|x| x == value) {
             self.items.remove(pos);
+            self.rebuild_key_indices_after_remove(pos);
+        }
+    }
+
+    /// VB.NET Collection.Remove(key) — remove by string key
+    pub fn remove_by_key(&mut self, key: &str) -> Result<(), RuntimeError> {
+        let key_lower = key.to_lowercase();
+        if let Some(idx) = self.keys.remove(&key_lower) {
+            if idx < self.items.len() {
+                self.items.remove(idx);
+                self.rebuild_key_indices_after_remove(idx);
+            }
+            Ok(())
+        } else {
+            Err(RuntimeError::Custom(format!("Argument 'Key' is not valid. Key not found: '{}'", key)))
         }
     }
 
     pub fn remove_at(&mut self, index: usize) -> Result<(), RuntimeError> {
         if index < self.items.len() {
             self.items.remove(index);
+            self.rebuild_key_indices_after_remove(index);
             Ok(())
         } else {
             Err(RuntimeError::Custom(format!("Index out of range: {}", index)))
         }
     }
 
+    /// After removing an item at `removed_pos`, fix up key indices.
+    fn rebuild_key_indices_after_remove(&mut self, removed_pos: usize) {
+        // Remove any key that pointed to removed_pos
+        self.keys.retain(|_, v| *v != removed_pos);
+        // Shift down indices above removed_pos
+        for v in self.keys.values_mut() {
+            if *v > removed_pos {
+                *v -= 1;
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.items.clear();
+        self.keys.clear();
     }
 
     pub fn count(&self) -> i32 {
@@ -45,6 +136,23 @@ impl ArrayList {
 
     pub fn item(&self, index: usize) -> Result<Value, RuntimeError> {
         self.items.get(index).cloned().ok_or_else(|| RuntimeError::Custom(format!("Index out of range: {}", index)))
+    }
+
+    /// VB.NET Collection.Item(key) — retrieve by string key
+    pub fn item_by_key(&self, key: &str) -> Result<Value, RuntimeError> {
+        let key_lower = key.to_lowercase();
+        if let Some(&idx) = self.keys.get(&key_lower) {
+            self.items.get(idx).cloned().ok_or_else(|| {
+                RuntimeError::Custom(format!("Key index out of range: '{}' -> {}", key, idx))
+            })
+        } else {
+            Err(RuntimeError::Custom(format!("Argument 'Index' is not valid. Key not found: '{}'", key)))
+        }
+    }
+
+    /// Check if a string key exists.
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.keys.contains_key(&key.to_lowercase())
     }
 
     pub fn set_item(&mut self, index: usize, value: Value) -> Result<(), RuntimeError> {

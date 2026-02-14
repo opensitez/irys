@@ -389,7 +389,7 @@ impl Value {
             Value::Array(arr) => Value::Array(arr.iter().map(|v| v.deep_clone()).collect()),
             Value::Collection(c) => {
                 let new_items = c.borrow().items.iter().map(|v| v.deep_clone()).collect();
-                Value::Collection(Rc::new(RefCell::new(crate::collections::ArrayList { items: new_items })))
+                Value::Collection(Rc::new(RefCell::new(crate::collections::ArrayList { items: new_items, keys: std::collections::HashMap::new() })))
             }
             Value::Queue(q) => {
                 let items: VecDeque<Value> = q.borrow().to_array().into_iter().map(|v| v.deep_clone()).collect();
