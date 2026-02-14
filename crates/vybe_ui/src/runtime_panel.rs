@@ -462,7 +462,6 @@ fn process_side_effects(
                                     match property.to_lowercase().as_str() {
                                         "text" => {
                                             let text_val = value.as_string();
-                                            eprintln!("[PropertyChange text] found ctrl={} val={:?}", control_part, &text_val[..text_val.len().min(30)]);
                                             ctrl.set_text(text_val.clone());
                                             // Mirror the new text back into form_obj so
                                             // needs_sync doesn't detect a stale mismatch

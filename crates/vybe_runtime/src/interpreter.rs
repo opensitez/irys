@@ -2530,16 +2530,35 @@ impl Interpreter {
             }
 
             Statement::Call { name, arguments } => {
+                // If the call name contains dots (e.g. "Me.txt1.DataBindings.Add"),
+                // the parser failed to produce an expression chain. Build and evaluate
+                // a synthetic MethodCall expression to handle it correctly.
+                if name.as_str().contains('.') {
+                    let parts: Vec<&str> = name.as_str().split('.').collect();
+                    if parts.len() >= 2 {
+                        let mut expr: Expression = if parts[0].eq_ignore_ascii_case("me") {
+                            Expression::Me
+                        } else {
+                            Expression::Variable(Identifier::new(parts[0]))
+                        };
+                        for part in &parts[1..parts.len()-1] {
+                            expr = Expression::MemberAccess(Box::new(expr), Identifier::new(*part));
+                        }
+                        let method_name = Identifier::new(parts[parts.len()-1]);
+                        let call_expr = Expression::MethodCall(
+                            Box::new(expr),
+                            method_name,
+                            arguments.to_vec(),
+                        );
+                        self.evaluate_expr(&call_expr)?;
+                        return Ok(());
+                    }
+                }
                 self.call_procedure(name, arguments)?;
                 Ok(())
             }
 
             Statement::ExpressionStatement(expr) => {
-                if let Expression::MethodCall(_, m, _) = expr {
-                    if m.as_str().eq_ignore_ascii_case("add") {
-                        eprintln!("[ExprStmt] MethodCall with add: {:?}", expr);
-                    }
-                }
                 self.evaluate_expr(expr)?;
                 Ok(())
             }
@@ -3708,7 +3727,7 @@ impl Interpreter {
                     let arg_values: Result<Vec<_>, _> = ctor_args.iter().map(|e| self.evaluate_expr(e)).collect();
                     let arg_values = arg_values?;
                     let family = arg_values.get(0).map(|v| v.as_string()).unwrap_or("Microsoft Sans Serif".to_string());
-                    let size = arg_values.get(1).map(|v| match v { Value::Double(d) => *d, Value::Integer(i) => *i as f64, _ => 8.25 }).unwrap_or(8.25);
+                    let size = arg_values.get(1).map(|v| match v { Value::Double(d) => *d, Value::Single(f) => *f as f64, Value::Integer(i) => *i as f64, _ => 8.25 }).unwrap_or(8.25);
                     let style = arg_values.get(2).and_then(|v| v.as_integer().ok()).unwrap_or(0); // 0=Regular
                     let mut fields = std::collections::HashMap::new();
                     fields.insert("__type".to_string(), Value::String("Font".to_string()));
@@ -4386,7 +4405,9 @@ impl Interpreter {
                             if let Some(init_method) = self.find_method(&class_name, "InitializeComponent") {
                                 match init_method {
                                     vybe_parser::ast::decl::MethodDecl::Sub(s) => {
-                                        let _ = self.call_user_sub(&s, &[], Some(obj_ref.clone()));
+                                        if let Err(e) = self.call_user_sub(&s, &[], Some(obj_ref.clone())) {
+                                            eprintln!("[InitializeComponent error] {}", e);
+                                        }
                                     }
                                     vybe_parser::ast::decl::MethodDecl::Function(f) => {
                                         let _ = self.call_user_function(&f, &[], Some(obj_ref.clone()));
@@ -5201,7 +5222,6 @@ impl Interpreter {
                                 let n = borrow.fields.get("name")
                                     .cloned()
                                     .unwrap_or(Value::String(class_name_str.clone()));
-                                eprintln!("[DB proxy OBJ] class={} name={}", class_name_str, n.as_string());
                                 n
                             };
                             flds.insert("__parent_name".to_string(), parent_name_val);
@@ -5246,7 +5266,6 @@ impl Interpreter {
                     let member_lower = member.as_str().to_lowercase();
                     // DataBindings proxy for string-proxy controls
                     if member_lower == "databindings" {
-                        eprintln!("[DB string-proxy] obj_name={}", obj_name);
                         let mut flds = std::collections::HashMap::new();
                         flds.insert("__type".to_string(), Value::String("DataBindings".to_string()));
                         flds.insert("__parent_name".to_string(), Value::String(obj_name.clone()));
@@ -6017,6 +6036,40 @@ impl Interpreter {
                         }
                     }
                     return Ok(Value::Nothing);
+                }
+            }
+        }
+
+        // Static dispatch for MemberAccess chains representing static classes
+        // (e.g. System.Drawing.ColorTranslator.FromHtml(...) where we can't
+        //  evaluate "System" as a variable)
+        {
+            fn expr_to_static_path(e: &Expression) -> Option<String> {
+                match e {
+                    Expression::Variable(id) => Some(id.as_str().to_lowercase()),
+                    Expression::MemberAccess(base, member) => {
+                        expr_to_static_path(base).map(|b| format!("{}.{}", b, member.as_str().to_lowercase()))
+                    }
+                    _ => None,
+                }
+            }
+            if let Some(class_path) = expr_to_static_path(obj) {
+                match class_path.as_str() {
+                    "colortranslator" | "system.drawing.colortranslator" => {
+                        let arg_values: Vec<Value> = args.iter().map(|a| self.evaluate_expr(a)).collect::<Result<_,_>>()?;
+                        match method_name.as_str() {
+                            "fromhtml" => {
+                                // Return the HTML color string as-is (the interpreter treats colors as strings)
+                                let color_str = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                                return Ok(Value::String(color_str));
+                            }
+                            "tohtml" => {
+                                return Ok(arg_values.get(0).map(|v| v.as_string()).map(Value::String).unwrap_or(Value::String(String::new())));
+                            }
+                            _ => return Ok(Value::Nothing),
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -9092,9 +9145,6 @@ impl Interpreter {
                                 })
                                 .unwrap_or_else(|| "UnknownControl".to_string());
 
-                            eprintln!("[Bindings.Add] parent_name={} prop={} dm={}", 
-                                parent_name, prop_name, data_member);
-
                             // Store binding info in environment for the control
                             let binding_key = format!("__binding_{}_{}", parent_name, prop_name);
                             let mut binding_fields = std::collections::HashMap::new();
@@ -9122,11 +9172,7 @@ impl Interpreter {
                                         let mut ds_borrow = ds_ref.borrow_mut();
                                         if let Some(Value::Array(bindings)) = ds_borrow.fields.get_mut("__bindings") {
                                             let binding_entry = format!("{}|{}|{}", parent_name, prop_name, data_member);
-                                            eprintln!("[DataBindings.Add] registering binding: {}", binding_entry);
                                             bindings.push(Value::String(binding_entry));
-                                            eprintln!("[DataBindings.Add] __bindings now has {} entries", bindings.len());
-                                        } else {
-                                            eprintln!("[DataBindings.Add] ERROR: __bindings field not found or wrong type on BindingSource");
                                         }
                                     }
 
@@ -9134,8 +9180,6 @@ impl Interpreter {
                                     let ds_val = ds_ref.borrow().fields.get("__datasource").cloned().unwrap_or(Value::Nothing);
                                     let dm = ds_ref.borrow().fields.get("datamember")
                                         .map(|v| v.as_string()).unwrap_or_default();
-                                    
-                                    eprintln!("[DataBindings.Add OK] ctrl={} ds={} type={}", parent_name, match &data_source { Value::String(s) => s, _ => "Object" }, ds_type);
                                     
                                     Self::inject_select_from_data_member(&ds_val, &dm);
                                     let pos = ds_ref.borrow().fields.get("position")
@@ -10088,7 +10132,6 @@ impl Interpreter {
                 let member_lower = member.to_lowercase();
 
                 if let Value::Object(obj_ref) = &obj_val {
-                    eprintln!("[DEBUG] CallByName: obj={}, member={}, callType={}", obj_ref.borrow().class_name, member, call_type);
                     match call_type {
                         2 | 8 => {
                             // Get property
@@ -11925,7 +11968,9 @@ impl Interpreter {
                 if let Some(init_method) = self.find_method(class_name, "InitializeComponent") {
                     match init_method {
                         vybe_parser::ast::decl::MethodDecl::Sub(s) => {
-                            let _ = self.call_user_sub(&s, &[], Some(obj_ref.clone()));
+                            if let Err(e) = self.call_user_sub(&s, &[], Some(obj_ref.clone())) {
+                                eprintln!("[InitializeComponent error] {}", e);
+                            }
                         }
                         vybe_parser::ast::decl::MethodDecl::Function(f) => {
                             let _ = self.call_user_function(&f, &[], Some(obj_ref.clone()));
@@ -12026,7 +12071,6 @@ impl Interpreter {
             } else { None })
             .unwrap_or_default();
 
-        eprintln!("[refresh_bindings] pos={} bindings={:?}", position, bindings);
         if bindings.is_empty() { return; }
 
         let row = self.binding_source_get_row(datasource, position);
@@ -12064,10 +12108,6 @@ impl Interpreter {
             } else { None })
             .unwrap_or_default();
 
-        eprintln!("[refresh_bindings_filtered] bs_name={} bindings={:?}",
-            bs_ref.borrow().fields.get("name").map(|v| v.as_string()).unwrap_or_default(),
-            bindings);
-
         if bindings.is_empty() { return; }
 
         let filter = bs_ref.borrow().fields.get("filter")
@@ -12086,8 +12126,6 @@ impl Interpreter {
             filtered.get(position as usize).cloned().unwrap_or(Value::Nothing)
         };
 
-        let row_is_object = matches!(&row_val, Value::Object(_));
-        eprintln!("[refresh_bindings_filtered] position={} row_is_object={}", position, row_is_object);
         if let Value::Object(r) = row_val {
             for entry in &bindings {
                 let parts: Vec<&str> = entry.split('|').collect();
@@ -12098,9 +12136,6 @@ impl Interpreter {
 
                     let cell_val = r.borrow().fields.get(&data_member)
                         .cloned().unwrap_or(Value::String(String::new()));
-
-                    eprintln!("[refresh_bindings_filtered] emitting PropertyChange ctrl={} prop={} val={:?}",
-                        ctrl_name, prop_name, cell_val.as_string());
 
                     self.side_effects.push_back(crate::RuntimeSideEffect::PropertyChange {
                         object: ctrl_name.to_string(),
