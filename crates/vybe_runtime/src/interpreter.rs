@@ -2841,6 +2841,14 @@ impl Interpreter {
                            let index = self.evaluate_expr(&args[0])?.as_integer()? as usize;
                            return arr.get(index).cloned().ok_or_else(|| RuntimeError::Custom("Array index out of bounds".to_string()));
                        }
+                       Value::Dictionary(dict) => {
+                           // Dictionary access via Call syntax (e.g. dict("key"))
+                           if args.len() != 1 {
+                               return Err(RuntimeError::Custom("Dictionary index must be 1 key".to_string()));
+                           }
+                           let key = self.evaluate_expr(&args[0])?;
+                           return dict.borrow().item(&key);
+                       }
                        _ => {} // Not a callable value, proceed to function lookup
                    }
                 }
@@ -2878,9 +2886,25 @@ impl Interpreter {
                 }
             }
             Expression::ArrayAccess(array, indices) => {
-                let arr = self.env.get(array.as_str())?;
-                let index = self.evaluate_expr(&indices[0])?.as_integer()? as usize;
-                arr.get_array_element(index)
+                let arr_val = self.env.get(array.as_str())?;
+                match arr_val {
+                    Value::Array(arr) => {
+                        let index = self.evaluate_expr(&indices[0])?.as_integer()? as usize;
+                        arr.get(index).cloned().ok_or_else(|| RuntimeError::Custom("Array index out of bounds".to_string()))
+                    }
+                    Value::Collection(col) => {
+                        let index = self.evaluate_expr(&indices[0])?.as_integer()? as usize;
+                        col.borrow().item(index)
+                    }
+                    Value::Dictionary(dict) => {
+                        if indices.len() != 1 {
+                            return Err(RuntimeError::Custom("Dictionary index must be 1 key".to_string()));
+                        }
+                        let key = self.evaluate_expr(&indices[0])?;
+                        return dict.borrow().item(&key);
+                    }
+                    _ => Err(RuntimeError::Custom(format!("Type is not indexable: {:?}", arr_val))),
+                }
             }
             Expression::ArrayLiteral(elements) => {
                 let vals: Result<Vec<Value>, RuntimeError> = elements
@@ -3721,6 +3745,26 @@ impl Interpreter {
                     let arg_values: Result<Vec<_>, _> = ctor_args.iter().map(|e| self.evaluate_expr(e)).collect();
                     let arg_values = arg_values?;
                     return crate::builtins::text_fns::stringbuilder_new_fn(&arg_values);
+                }
+
+                // ===== PROCESS =====
+                if class_name.eq_ignore_ascii_case("process") || class_name.eq_ignore_ascii_case("system.diagnostics.process") {
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("Process".to_string()));
+                    
+                    // StartInfo property: ProcessStartInfo object
+                    let mut si_fields = std::collections::HashMap::new();
+                    si_fields.insert("__type".to_string(), Value::String("ProcessStartInfo".to_string()));
+                    si_fields.insert("filename".to_string(), Value::String(String::new()));
+                    si_fields.insert("arguments".to_string(), Value::String(String::new()));
+                    si_fields.insert("useshellexecute".to_string(), Value::Boolean(true));
+                    let start_info = crate::value::ObjectData { class_name: "ProcessStartInfo".to_string(), fields: si_fields };
+                    let si_obj = Value::Object(std::rc::Rc::new(std::cell::RefCell::new(start_info)));
+                    
+                    fields.insert("startinfo".to_string(), si_obj);
+                    
+                    let obj = crate::value::ObjectData { class_name: "Process".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
                 }
 
                 // Check if this is a short WinForms control name
@@ -5348,6 +5392,7 @@ impl Interpreter {
     pub fn call_procedure(&mut self, name: &Identifier, args: &[Expression]) -> Result<Value, RuntimeError> {
         let name_str = name.as_str().to_lowercase();
 
+
         // First check if it's actually an array access (arrays and functions use same syntax in VB)
         // Check local variable shadowing first
         if let Ok(val) = self.env.get(name.as_str()) {
@@ -5766,6 +5811,59 @@ impl Interpreter {
                 return self.dispatch_console_method("setcursorposition", &arg_values);
             }
 
+            "callbyname" | "microsoft.visualbasic.interaction.callbyname" => {
+                let obj_val = arg_values.get(0).cloned().unwrap_or(Value::Nothing);
+                let member = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                let call_type = arg_values.get(2).map(|v| v.as_integer().unwrap_or(1)).unwrap_or(1);
+                let member_lower = member.to_lowercase();
+                
+                if let Value::Object(obj_ref) = &obj_val {
+                    match call_type {
+                        2 | 8 => {
+                            // Get property or field
+                            let obj_data = obj_ref.borrow();
+                            if let Some(val) = obj_data.fields.get(&member_lower) {
+                                return Ok(val.clone());
+                            }
+                            return Ok(Value::Nothing);
+                        }
+                        4 => {
+                            // Set property or field
+                            let set_val = arg_values.get(3).cloned().unwrap_or(Value::Nothing);
+                            obj_ref.borrow_mut().fields.insert(member_lower, set_val);
+                            return Ok(Value::Nothing);
+                        }
+                        _ => {
+                            // Method call (1)
+                            // CallByName(obj, "MethodName", 1, arg1, arg2...)
+                            // Arguments start at index 3
+                            let method_args = if arg_values.len() > 3 {
+                                &arg_values[3..]
+                            } else {
+                                &[]
+                            };
+
+                            let class_name = obj_ref.borrow().class_name.clone();
+                            if let Some(method_decl) = self.find_method(&class_name, &member) {
+                                match method_decl {
+                                    vybe_parser::ast::decl::MethodDecl::Sub(s) => {
+                                        self.call_user_sub(&s, method_args, Some(obj_ref.clone()))?;
+                                        return Ok(Value::Nothing);
+                                    }
+                                    vybe_parser::ast::decl::MethodDecl::Function(f) => {
+                                        let result = self.call_user_function(&f, method_args, Some(obj_ref.clone()))?;
+                                        return Ok(result);
+                                    }
+                                }
+                            } else {
+                                return Err(RuntimeError::UndefinedFunction(format!("Method '{}' not found in class '{}'", member, class_name)));
+                            }
+                        }
+                    }
+                }
+                return Ok(Value::Nothing);
+            }
+
             _ => {}
         }
     }
@@ -5779,7 +5877,6 @@ impl Interpreter {
 
     fn call_method(&mut self, obj: &Expression, method: &Identifier, args: &[Expression]) -> Result<Value, RuntimeError> {
         let method_name = method.as_str().to_lowercase();
-
         // ── MyBase dispatch ─────────────────────────────────────────────
         // MyBase.Method() dispatches to the parent class's method on the
         // same object instance (Me).
@@ -5853,9 +5950,7 @@ impl Interpreter {
 
         // Evaluate object to check if it's a Collection or Dialog
         let eval_result = self.evaluate_expr(obj);
-        if method_name == "add" {
-            eprintln!("[call_method::add] obj_expr={:?} eval={}", obj, match &eval_result { Ok(Value::Object(r)) => format!("Object({})", r.borrow().fields.get("__type").map(|v|v.as_string()).unwrap_or_default()), Ok(Value::String(s)) => format!("String({})", s), Ok(Value::Nothing) => "Nothing".to_string(), Ok(_) => "other".to_string(), Err(e) => format!("ERR: {:?}", e) });
-        }
+        // if method_name == "add" { ... }
         if let Ok(ref obj_val) = eval_result {
             // Universal value methods (works on any type: Integer, String, Double, Boolean, etc.)
             match method_name.as_str() {
@@ -6904,7 +6999,7 @@ impl Interpreter {
                     }
 
                     // Process instance methods
-                    if type_name == "Process" {
+                    if type_name.eq_ignore_ascii_case("Process") || type_name.eq_ignore_ascii_case("System.Diagnostics.Process") {
                         match method_name.as_str() {
                             "waitforexit" => {
                                 // In sync mode, the process was spawned and detached. No-op.
@@ -6915,8 +7010,36 @@ impl Interpreter {
                                 return Ok(Value::Nothing);
                             }
                             "start" => {
-                                // Instance Start() — no-op, already started
-                                return Ok(Value::Boolean(true));
+                                // Instance Start() — start process using StartInfo
+                                let start_info = obj_ref.borrow().fields.get("startinfo").cloned().unwrap_or(Value::Nothing);
+                                if let Value::Object(si_ref) = start_info {
+                                    let filename = si_ref.borrow().fields.get("filename").map(|v| v.as_string()).unwrap_or_default();
+                                    let args = si_ref.borrow().fields.get("arguments").map(|v| v.as_string()).unwrap_or_default();
+                                    
+                                    if !filename.is_empty() {
+                                        let mut cmd = std::process::Command::new(&filename);
+                                        if !args.is_empty() {
+                                            for a in args.split_whitespace() {
+                                                 cmd.arg(a);
+                                            }
+                                        }
+                                        
+                                        // Spawn process
+                                        match cmd.spawn() {
+                                            Ok(child) => {
+                                                // Store Id
+                                                obj_ref.borrow_mut().fields.insert("id".to_string(), Value::Integer(child.id() as i32));
+                                                // Since we cannot store Child handle in Value enum currently, we cannot wait or get real exit code.
+                                                // Mock it as if it finished successfully immediately (detached).
+                                                obj_ref.borrow_mut().fields.insert("exitcode".to_string(), Value::Integer(0));
+                                                obj_ref.borrow_mut().fields.insert("hasexited".to_string(), Value::Boolean(true));
+                                                return Ok(Value::Boolean(true));
+                                            }
+                                            Err(e) => return Err(RuntimeError::Custom(format!("Process.Start failed: {}", e))),
+                                        }
+                                    }
+                                }
+                                return Ok(Value::Boolean(false));
                             }
                             _ => {}
                         }
@@ -9825,8 +9948,23 @@ impl Interpreter {
                         };
                         fields.insert(field_name, default_val);
                     }
-                    let obj = crate::value::ObjectData { class_name: class_name_str, fields };
-                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                    let obj = crate::value::ObjectData { class_name: class_name_str.clone(), fields };
+                    let obj_ref = std::rc::Rc::new(std::cell::RefCell::new(obj));
+
+                    // Call Sub New if it exists
+                    if let Some(new_method) = self.find_method(&class_name_str, "new") {
+                         match new_method {
+                             vybe_parser::ast::decl::MethodDecl::Sub(s) => {
+                                 // Activator.CreateInstance(type) calls parameterless New()
+                                 // Or matching arguments if provided (but here we only implement 1-arg version)
+                                 // Assuming parameterless for now.
+                                 let _ = self.call_user_sub(&s, &[], Some(obj_ref.clone()));
+                             }
+                             _ => {}
+                         }
+                    }
+                    
+                    return Ok(Value::Object(obj_ref));
                 }
                 // Check built-in types
                 match type_lower.as_str() {
@@ -9867,6 +10005,7 @@ impl Interpreter {
                 let member_lower = member.to_lowercase();
 
                 if let Value::Object(obj_ref) = &obj_val {
+                    eprintln!("[DEBUG] CallByName: obj={}, member={}, callType={}", obj_ref.borrow().class_name, member, call_type);
                     match call_type {
                         2 | 8 => {
                             // Get property

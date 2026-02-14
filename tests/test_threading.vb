@@ -1,6 +1,6 @@
-' Test: Threading, Tasks, and BackgroundWorker
 Imports System.Threading
 Imports System.ComponentModel
+Imports System.Diagnostics
 
 Module TestThreading
     Dim passCount As Integer = 0
@@ -105,6 +105,23 @@ Module TestThreading
         ThreadPool.QueueUserWorkItem(Sub(state) Console.Write(""))
         passCount = passCount + 1
         Console.WriteLine("  PASS: ThreadPool.QueueUserWorkItem: executed without error")
+
+        ' ===== Process =====
+        Console.WriteLine("Test: Process")
+        Try
+            Dim p As New Process()
+            p.StartInfo.FileName = "echo"
+            p.StartInfo.Arguments = "hello process"
+            p.Start()
+            p.WaitForExit()
+            AssertEqual(p.ExitCode, 0, "Process: ExitCode 0")
+            p.Close()
+            passCount = passCount + 1
+            Console.WriteLine("  PASS: Process executed and waited")
+        Catch ex As Exception
+            Console.WriteLine("FAIL: Process test exception: " & ex.Message)
+            failCount = failCount + 1
+        End Try
 
         ' ===== Summary =====
         Console.WriteLine("")

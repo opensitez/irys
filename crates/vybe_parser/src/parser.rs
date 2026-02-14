@@ -1010,7 +1010,12 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
         }
         Rule::call_statement => {
             let mut inner = pair.into_inner();
-            let first = inner.next().unwrap();
+            let mut first = inner.next().unwrap();
+
+            // Skip optional Call keyword
+            if first.as_rule() == Rule::call_keyword {
+                first = inner.next().unwrap();
+            }
 
             // Check if it's a member_call, member_access, call_expression, me_member_call, cast_member_call, or simple identifier
             match first.as_rule() {
