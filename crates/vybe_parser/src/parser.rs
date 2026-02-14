@@ -1960,34 +1960,25 @@ fn parse_lambda_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
         Rule::NEWLINE => {
             // Multiline block
             let mut body_stmts = Vec::new();
-            for line_pair in inner {
-                match line_pair.as_rule() {
-                    Rule::line => {
-                        // Line can contain declarations or statements
-                        if let Some(inner_pair) = line_pair.into_inner().next() {
-                            match inner_pair.as_rule() {
-                                Rule::statement_line => {
-                                    for stmt_pair in inner_pair.into_inner() {
-                                        if stmt_pair.as_rule() != Rule::NEWLINE && stmt_pair.as_rule() != Rule::EOI {
-                                            body_stmts.push(parse_statement(stmt_pair)?);
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    if let Some(decl) = try_parse_declaration(inner_pair.clone())? {
-                                        // Wrap declaration in a statement if needed, or handle separately
-                                        // For now, lambdas usually contain statements.
-                                        match decl {
-                                            Declaration::Variable(v) => body_stmts.push(Statement::Dim(v)),
-                                            Declaration::Constant(c) => body_stmts.push(Statement::Const(c)),
-                                            _ => {} // Ignore other decls for now
-                                        }
-                                    }
-                                }
+            for item in inner {
+                match item.as_rule() {
+                    Rule::statement_line => {
+                        for stmt_pair in item.into_inner() {
+                            if stmt_pair.as_rule() != Rule::NEWLINE && stmt_pair.as_rule() != Rule::EOI {
+                                body_stmts.push(parse_statement(stmt_pair)?);
                             }
                         }
                     }
-                    _ => {}
+                    _ => {
+                        // try_parse_declaration or other rules that might appear
+                        if let Some(decl) = try_parse_declaration(item.clone())? {
+                            match decl {
+                                Declaration::Variable(v) => body_stmts.push(Statement::Dim(v)),
+                                Declaration::Constant(c) => body_stmts.push(Statement::Const(c)),
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
             LambdaBody::Block(body_stmts)

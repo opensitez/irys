@@ -266,8 +266,22 @@ impl Interpreter {
             class_name: "Namespace".to_string(), fields: security_fields,
         })));
         system_fields.insert("security".to_string(), security_obj.clone());
-        
         system_fields.insert("text".to_string(), text_obj.clone());
+
+        // System.Diagnostics.Process + ProcessStartInfo
+        let mut diag_fields = HashMap::new();
+        let process_class_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "Process".to_string(), fields: HashMap::new(),
+        })));
+        let psi_class_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "ProcessStartInfo".to_string(), fields: HashMap::new(),
+        })));
+        diag_fields.insert("process".to_string(), process_class_obj);
+        diag_fields.insert("processstartinfo".to_string(), psi_class_obj);
+        let diag_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "Namespace".to_string(), fields: diag_fields,
+        })));
+        system_fields.insert("diagnostics".to_string(), diag_obj.clone());
         
         let system_obj_data = ObjectData {
             class_name: "Namespace".to_string(),
@@ -282,6 +296,7 @@ impl Interpreter {
         self.env.define("system.text.encoding", encoding_obj.clone());
         self.env.define("system.security", security_obj.clone());
         self.env.define("system.security.cryptography", crypto_obj.clone());
+        self.env.define("system.diagnostics", diag_obj.clone());
         
         // Also register Console and Math globally for convenience (like implicit Imports System)
         self.env.define("console", console_obj);
@@ -3697,6 +3712,18 @@ impl Interpreter {
                         }
                         "painteventargs" | "system.windows.forms.painteventargs" => {
                             return Ok(Self::make_paint_event_args());
+                        }
+                        "processstartinfo" | "system.diagnostics.processstartinfo" => {
+                            let arg_values: Result<Vec<_>, _> = ctor_args.iter().map(|e| self.evaluate_expr(e)).collect();
+                            let arg_values = arg_values?;
+                            let mut fields = std::collections::HashMap::new();
+                            fields.insert("filename".to_string(), arg_values.get(0).cloned().unwrap_or(Value::String(String::new())));
+                            fields.insert("arguments".to_string(), arg_values.get(1).cloned().unwrap_or(Value::String(String::new())));
+                            fields.insert("__type".to_string(), Value::String("ProcessStartInfo".to_string()));
+                            return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(crate::value::ObjectData {
+                                class_name: "ProcessStartInfo".to_string(),
+                                fields,
+                            }))));
                         }
                         _ => {}
                     }
@@ -10972,26 +10999,61 @@ impl Interpreter {
 
             // ---- Process.Start ----
             "process.start" | "system.diagnostics.process.start" => {
-                let file = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
-                let process_args = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
-                let mut cmd = std::process::Command::new(&file);
-                if !process_args.is_empty() {
+                let mut filename = String::new();
+                let mut arguments = String::new();
+                
+                if let Some(val) = arg_values.get(0) {
+                    match val {
+                        Value::Object(obj_ref) => {
+                            let b = obj_ref.borrow();
+                            if b.class_name.eq_ignore_ascii_case("ProcessStartInfo") {
+                                filename = b.fields.get("filename").map(|v| v.as_string()).unwrap_or_default();
+                                arguments = b.fields.get("arguments").map(|v| v.as_string()).unwrap_or_default();
+                            } else {
+                                filename = val.as_string();
+                            }
+                        }
+                        _ => {
+                            filename = val.as_string();
+                            arguments = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                        }
+                    }
+                }
+
+                if filename.is_empty() {
+                    return Err(RuntimeError::Custom("Process.Start: missing executable path".to_string()));
+                }
+
+                let mut cmd = std::process::Command::new(&filename);
+                if !arguments.is_empty() {
                     // Split args by space (simple split)
-                    for a in process_args.split_whitespace() {
+                    for a in arguments.split_whitespace() {
                         cmd.arg(a);
                     }
                 }
                 match cmd.spawn() {
                     Ok(child) => {
-                        // Return a Process object with Id
+                        // Generate a unique handle ID
+                        let handle_id = format!("proc_{}", child.id());
+                        
+                        // Register the child process in the global registry
+                        {
+                            let mut reg = get_registry().lock().unwrap();
+                            reg.processes.insert(handle_id.clone(), child);
+                        }
+
+                        // Return a Process object with Id and __handle
                         let mut fields = std::collections::HashMap::new();
                         fields.insert("__type".to_string(), Value::String("Process".to_string()));
-                        fields.insert("id".to_string(), Value::Integer(child.id() as i32));
+                        fields.insert("__handle".to_string(), Value::String(handle_id));
+                        fields.insert("id".to_string(), Value::Integer(0)); // child.id() is used for handle
                         fields.insert("hasexited".to_string(), Value::Boolean(false));
+                        fields.insert("exitcode".to_string(), Value::Integer(0));
+                        
                         let obj = crate::value::ObjectData { class_name: "Process".to_string(), fields };
                         return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
                     }
-                    Err(e) => return Err(RuntimeError::Custom(format!("Process.Start failed: {}", e))),
+                    Err(e) => return Err(RuntimeError::Custom(format!("Process.Start failed: {} (file={})", e, filename))),
                 }
             }
 

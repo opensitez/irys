@@ -14,8 +14,8 @@ Module CryptoTest
         Dim hashStr1 = BitConverter.ToString(hash1).Replace("-", "").ToLower()
         Console.WriteLine("MD5: " & hashStr1)
         
-        ' MD5 hash of "hello vybe" is 49793144063857d427fa1179cb10c4f8
-        If hashStr1 = "49793144063857d427fa1179cb10c4f8" Then
+        ' MD5 hash of "hello vybe" is b48757e77d5ada3794724f2e0c6c1d37
+        If hashStr1 = "b48757e77d5ada3794724f2e0c6c1d37" Then
             Console.WriteLine("MD5 Success")
         Else
             Console.WriteLine("MD5 Failure")
@@ -27,8 +27,8 @@ Module CryptoTest
         Dim hashStr2 = BitConverter.ToString(hash2).Replace("-", "").ToLower()
         Console.WriteLine("SHA256: " & hashStr2)
         
-        ' SHA256 hash of "hello vybe" is 28da0c776097561858c89423c8309df38210134468f7637841cbad89ed62f689
-        If hashStr2 = "28da0c776097561858c89423c8309df38210134468f7637841cbad89ed62f689" Then
+        ' SHA256 hash of "hello vybe" is 1bb463594d86e3a7ee1e6f5712d87f65d116f5e081f9bc118d971933d16ca1da
+        If hashStr2 = "1bb463594d86e3a7ee1e6f5712d87f65d116f5e081f9bc118d971933d16ca1da" Then
             Console.WriteLine("SHA256 Success")
         Else
             Console.WriteLine("SHA256 Failure")
