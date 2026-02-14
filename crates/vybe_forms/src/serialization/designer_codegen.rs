@@ -1,5 +1,6 @@
 use crate::control::{Control, ControlType};
 use crate::form::Form;
+use crate::properties::PropertyValue;
 
 /// Returns the field name for a control in VB.NET designer code.
 /// Array members use `Name_Index` (e.g., `Command1_0`), non-array use `Name`.
@@ -11,7 +12,7 @@ fn control_field_name(control: &Control) -> String {
     }
 }
 
-/// Maps a ControlType to its fully-qualified VB.NET class name
+/// Maps a ControlType to its fully-qualified VB.NET class name.
 pub fn control_type_to_vbnet(ct: &ControlType) -> &str {
     match ct {
         ControlType::Button => "System.Windows.Forms.Button",
@@ -59,6 +60,40 @@ pub fn control_type_to_vbnet(ct: &ControlType) -> &str {
     }
 }
 
+/// Format a PropertyValue as a VB.NET assignment RHS.
+/// Strings are quoted with `""` escaping; booleans use True/False;
+/// Expressions are emitted verbatim (raw VB.NET code).
+fn property_value_to_vbnet(val: &PropertyValue) -> Option<String> {
+    match val {
+        PropertyValue::String(s) => Some(format!("\"{}\"", s.replace('"', "\"\""))),
+        PropertyValue::Integer(i) => Some(i.to_string()),
+        PropertyValue::Boolean(b) => Some(if *b { "True".to_string() } else { "False".to_string() }),
+        PropertyValue::Double(d) => Some(d.to_string()),
+        PropertyValue::Expression(code) => Some(code.clone()),
+        // StringArray values need special handling (Items.AddRange etc.) – skip in generic output
+        PropertyValue::StringArray(_) => None,
+    }
+}
+
+/// Format a font string "Family, sizepx[, Style]" into a VB.NET Font constructor call.
+fn format_font(font_str: &str) -> String {
+    let mut parts = font_str.splitn(3, ',').map(|s| s.trim());
+    let family = parts.next().unwrap_or("Segoe UI");
+    let size_raw = parts.next().unwrap_or("12");
+    let style_opt = parts.next(); // optional third part e.g. "System.Drawing.FontStyle.Bold"
+    let size_clean = size_raw.trim_end_matches("px").trim_end_matches("pt");
+    let size_val: f32 = size_clean.parse().unwrap_or(12.0);
+    let family_escaped = family.replace('"', "\"\"");
+    if let Some(style) = style_opt {
+        format!(
+            "New System.Drawing.Font(\"{}\", {}F, {})",
+            family_escaped, size_val, style
+        )
+    } else {
+        format!("New System.Drawing.Font(\"{}\", {}F)", family_escaped, size_val)
+    }
+}
+
 /// Generates VB.NET designer code (InitializeComponent) from a Form object.
 /// Output is compatible with real VB.NET Windows Forms designer files.
 pub fn generate_designer_code(form: &Form) -> String {
@@ -72,22 +107,24 @@ pub fn generate_designer_code(form: &Form) -> String {
     for control in &form.controls {
         let vb_type = control_type_to_vbnet(&control.control_type);
         let field_name = control_field_name(control);
-        code.push_str(&format!("    Friend WithEvents {} As {}\n", field_name, vb_type));
+        code.push_str(&format!(
+            "    Friend WithEvents {} As {}\n",
+            field_name, vb_type
+        ));
     }
     code.push('\n');
 
     code.push_str("    Private Sub InitializeComponent()\n");
 
-    // Control instantiation
+    // ── 1. Instantiation ───────────────────────────────────────────────────
     for control in &form.controls {
         let vb_type = control_type_to_vbnet(&control.control_type);
         let field_name = control_field_name(control);
         code.push_str(&format!("        Me.{} = New {}()\n", field_name, vb_type));
     }
-
     code.push_str("        Me.SuspendLayout()\n");
 
-    // Control property assignment
+    // ── 2. Per-control property assignments ────────────────────────────────
     for control in &form.controls {
         let field_name = control_field_name(control);
         let is_non_visual = control.control_type.is_non_visual();
@@ -105,133 +142,206 @@ pub fn generate_designer_code(form: &Form) -> String {
 
         // Non-visual component specific properties
         if is_non_visual {
+            // DataSource (reference to another component)
             if let Some(ds) = control.properties.get_string("DataSource") {
                 if !ds.is_empty() {
-                    code.push_str(&format!("        Me.{}.DataSource = Me.{}\n", field_name, ds));
+                    code.push_str(&format!(
+                        "        Me.{}.DataSource = Me.{}\n",
+                        field_name, ds
+                    ));
                 }
             }
             if let Some(dm) = control.properties.get_string("DataMember") {
                 if !dm.is_empty() {
-                    code.push_str(&format!("        Me.{}.DataMember = \"{}\"\n", field_name, dm));
+                    code.push_str(&format!(
+                        "        Me.{}.DataMember = \"{}\"\n",
+                        field_name, dm
+                    ));
                 }
             }
             if let Some(filter) = control.properties.get_string("Filter") {
                 if !filter.is_empty() {
-                    code.push_str(&format!("        Me.{}.Filter = \"{}\"\n", field_name, filter));
+                    code.push_str(&format!(
+                        "        Me.{}.Filter = \"{}\"\n",
+                        field_name, filter
+                    ));
                 }
             }
             if let Some(sort) = control.properties.get_string("Sort") {
                 if !sort.is_empty() {
-                    code.push_str(&format!("        Me.{}.Sort = \"{}\"\n", field_name, sort));
+                    code.push_str(&format!(
+                        "        Me.{}.Sort = \"{}\"\n",
+                        field_name, sort
+                    ));
                 }
             }
             if let Some(tn) = control.properties.get_string("TableName") {
                 if !tn.is_empty() {
-                    code.push_str(&format!("        Me.{}.TableName = \"{}\"\n", field_name, tn));
+                    code.push_str(&format!(
+                        "        Me.{}.TableName = \"{}\"\n",
+                        field_name, tn
+                    ));
                 }
             }
             if let Some(dsn) = control.properties.get_string("DataSetName") {
                 if !dsn.is_empty() {
-                    code.push_str(&format!("        Me.{}.DataSetName = \"{}\"\n", field_name, dsn));
+                    code.push_str(&format!(
+                        "        Me.{}.DataSetName = \"{}\"\n",
+                        field_name, dsn
+                    ));
                 }
             }
             if let Some(sc) = control.properties.get_string("SelectCommand") {
                 if !sc.is_empty() {
-                    code.push_str(&format!("        Me.{}.SelectCommand = \"{}\"\n", field_name, sc));
+                    code.push_str(&format!(
+                        "        Me.{}.SelectCommand = \"{}\"\n",
+                        field_name, sc
+                    ));
                 }
             }
             if let Some(cs) = control.properties.get_string("ConnectionString") {
                 if !cs.is_empty() {
-                    code.push_str(&format!("        Me.{}.ConnectionString = \"{}\"\n", field_name, cs));
+                    code.push_str(&format!(
+                        "        Me.{}.ConnectionString = \"{}\"\n",
+                        field_name, cs
+                    ));
                 }
             }
-            code.push_str(&format!("        Me.{}.Name = \"{}\"\n", field_name, control.name));
+            code.push_str(&format!(
+                "        Me.{}.Name = \"{}\"\n",
+                field_name, control.name
+            ));
+            // Arbitrary properties for non-visual components (e.g. custom adapters)
+            emit_arbitrary_props(&mut code, &field_name, control, &NON_VISUAL_HANDLED);
             continue;
         }
 
-        // Text property
-        let text = control
-            .get_text()
-            .unwrap_or(control.name.as_str());
-        code.push_str(&format!("        Me.{}.Text = \"{}\"\n", field_name, text));
+        // ── Visual control properties ─────────────────────────────────────
 
-        // Colors
+        // Text
+        let text = control.get_text().unwrap_or(control.name.as_str());
+        code.push_str(&format!("        Me.{}.Text = \"{}\"\n", field_name, text.replace('"', "\"\"")));
+
+        // BackColor
         if let Some(bc) = control.get_back_color() {
             code.push_str(&format!(
                 "        Me.{}.BackColor = System.Drawing.ColorTranslator.FromHtml(\"{}\")\n",
                 field_name, bc
             ));
+        } else if let Some(pv) = control.properties.get("BackColor") {
+            // Named/system color stored as Expression
+            if let Some(s) = property_value_to_vbnet(pv) {
+                code.push_str(&format!("        Me.{}.BackColor = {}\n", field_name, s));
+            }
         }
+
+        // ForeColor
         if let Some(fc) = control.get_fore_color() {
             code.push_str(&format!(
                 "        Me.{}.ForeColor = System.Drawing.ColorTranslator.FromHtml(\"{}\")\n",
                 field_name, fc
             ));
+        } else if let Some(pv) = control.properties.get("ForeColor") {
+            if let Some(s) = property_value_to_vbnet(pv) {
+                code.push_str(&format!("        Me.{}.ForeColor = {}\n", field_name, s));
+            }
         }
 
-        // Font (expects format: Family, size[px/pt])
+        // Font
         if let Some(font_str) = control.get_font() {
-            let mut parts = font_str.split(',').map(|s| s.trim());
-            let family = parts.next().unwrap_or("Segoe UI");
-            let size_raw = parts.next().unwrap_or("12");
-            let size_clean = size_raw.trim_end_matches("px").trim_end_matches("pt");
-            let size_val: f32 = size_clean.parse().unwrap_or(12.0);
             code.push_str(&format!(
-                "        Me.{}.Font = New System.Drawing.Font(\"{}\", {}F)\n",
+                "        Me.{}.Font = {}\n",
                 field_name,
-                family.replace("\"", "\"\""),
-                size_val
+                format_font(font_str)
+            ));
+        } else if let Some(pv) = control.properties.get("Font") {
+            if let Some(s) = property_value_to_vbnet(pv) {
+                code.push_str(&format!("        Me.{}.Font = {}\n", field_name, s));
+            }
+        }
+
+        // Name and optional array Tag
+        code.push_str(&format!(
+            "        Me.{}.Name = \"{}\"\n",
+            field_name, control.name
+        ));
+        if let Some(idx) = control.index {
+            code.push_str(&format!(
+                "        Me.{}.Tag = \"ArrayIndex={}\"\n",
+                field_name, idx
             ));
         }
 
-        // For array members, set Name to base name and Tag with array index
-        code.push_str(&format!("        Me.{}.Name = \"{}\"\n", field_name, control.name));
-        if let Some(idx) = control.index {
-            code.push_str(&format!("        Me.{}.Tag = \"ArrayIndex={}\"\n", field_name, idx));
-        }
-
-        // DataSource binding for data-bound visual controls
+        // DataSource/DataMember for complex-binding controls (DataGridView, ListBox, ComboBox, BindingNavigator)
         if control.control_type.supports_complex_binding() {
             if let Some(ds) = control.properties.get_string("DataSource") {
                 if !ds.is_empty() {
-                    code.push_str(&format!("        Me.{}.DataSource = Me.{}\n", field_name, ds));
+                    code.push_str(&format!(
+                        "        Me.{}.DataSource = Me.{}\n",
+                        field_name, ds
+                    ));
                 }
             }
             if let Some(dm) = control.properties.get_string("DataMember") {
                 if !dm.is_empty() {
-                    code.push_str(&format!("        Me.{}.DataMember = \"{}\"\n", field_name, dm));
+                    code.push_str(&format!(
+                        "        Me.{}.DataMember = \"{}\"\n",
+                        field_name, dm
+                    ));
                 }
             }
         }
 
-        // DisplayMember/ValueMember for list controls (ComboBox, ListBox)
-        if matches!(control.control_type, ControlType::ComboBox | ControlType::ListBox) {
+        // DisplayMember/ValueMember for list controls
+        if matches!(
+            control.control_type,
+            ControlType::ComboBox | ControlType::ListBox
+        ) {
             if let Some(dpm) = control.properties.get_string("DisplayMember") {
                 if !dpm.is_empty() {
-                    code.push_str(&format!("        Me.{}.DisplayMember = \"{}\"\n", field_name, dpm));
+                    code.push_str(&format!(
+                        "        Me.{}.DisplayMember = \"{}\"\n",
+                        field_name, dpm
+                    ));
                 }
             }
             if let Some(vm) = control.properties.get_string("ValueMember") {
                 if !vm.is_empty() {
-                    code.push_str(&format!("        Me.{}.ValueMember = \"{}\"\n", field_name, vm));
+                    code.push_str(&format!(
+                        "        Me.{}.ValueMember = \"{}\"\n",
+                        field_name, vm
+                    ));
                 }
             }
         }
 
-        // Simple data bindings (DataBindings.Add) for all visual controls
-        if let Some(binding_source) = control.properties.get_string("DataBindings.Source") {
+        // DataBindings.Add — emit all DataBindings.* prefix keys (not just the hardcoded four)
+        if let Some(binding_source) = control
+            .properties
+            .get_string("DataBindings.Source")
+            .map(|s| s.to_string())
+        {
             if !binding_source.is_empty() {
-                // Determine which property is being bound
-                let bindable_props = ["Text", "Checked", "ImageLocation", "Value"];
-                for prop in &bindable_props {
-                    let key = format!("DataBindings.{}", prop);
-                    if let Some(col) = control.properties.get_string(&key) {
-                        if !col.is_empty() {
-                            code.push_str(&format!(
-                                "        Me.{}.DataBindings.Add(\"{}\", Me.{}, \"{}\")\n",
-                                field_name, prop, binding_source, col
-                            ));
+                // Collect all DataBindings.<PropName> entries in stable order
+                let mut db_entries: Vec<(&str, &str)> = control
+                    .properties
+                    .iter()
+                    .filter_map(|(key, val)| {
+                        if key.starts_with("DataBindings.") && key != "DataBindings.Source" {
+                            let prop = &key["DataBindings.".len()..];
+                            val.as_string().map(|col| (prop, col))
+                        } else {
+                            None
                         }
+                    })
+                    .collect();
+                db_entries.sort_by_key(|(p, _)| *p);
+                for (prop, col) in db_entries {
+                    if !col.is_empty() {
+                        code.push_str(&format!(
+                            "        Me.{}.DataBindings.Add(\"{}\", Me.{}, \"{}\")\n",
+                            field_name, prop, binding_source, col
+                        ));
                     }
                 }
             }
@@ -241,7 +351,10 @@ pub fn generate_designer_code(form: &Form) -> String {
         if matches!(control.control_type, ControlType::BindingNavigator) {
             if let Some(bs) = control.properties.get_string("BindingSource") {
                 if !bs.is_empty() {
-                    code.push_str(&format!("        Me.{}.BindingSource = Me.{}\n", field_name, bs));
+                    code.push_str(&format!(
+                        "        Me.{}.BindingSource = Me.{}\n",
+                        field_name, bs
+                    ));
                 }
             }
         }
@@ -251,93 +364,165 @@ pub fn generate_designer_code(form: &Form) -> String {
             field_name, control.tab_index
         ));
 
-        // Hierarchy: Me.Parent.Controls.Add(Me.Child)
+        // Arbitrary properties (everything not handled above)
+        emit_arbitrary_props(&mut code, &field_name, control, &VISUAL_HANDLED);
+    }
+
+    // ── 3. Controls.Add — nested children first, then top-level ───────────
+    // Children of containers first (Me.Panel.Controls.Add(Me.child))
+    for control in &form.controls {
+        if control.control_type.is_non_visual() {
+            continue;
+        }
         if let Some(parent_id) = control.parent_id {
             if let Some(parent) = form.controls.iter().find(|c| c.id == parent_id) {
                 let parent_field = control_field_name(parent);
-                code.push_str(&format!("        Me.{}.Controls.Add(Me.{})\n", parent_field, field_name));
-            } else {
-                // Parent not found, fallback to Form
-                code.push_str(&format!("        Me.Controls.Add(Me.{})\n", field_name));
+                let child_field = control_field_name(control);
+                code.push_str(&format!(
+                    "        Me.{}.Controls.Add(Me.{})\n",
+                    parent_field, child_field
+                ));
             }
-        } else {
-            // No parent -> Form is parent
-            code.push_str(&format!("        Me.Controls.Add(Me.{})\n", field_name));
         }
-
-        // Generic arbitrary property generation
-        // Blacklist of properties already handled above or special
-        let handled = [
-            "Text", "BackColor", "ForeColor", "Font", "Name", "Tag", "TabIndex", "Location", "Size",
-            "DataSource", "DataMember", "Filter", "Sort", "TableName", "DataSetName", "SelectCommand", "ConnectionString",
-            "DisplayMember", "ValueMember", "BindingSource",
-            // DataBindings key prefixes
-            "DataBindings.Source", "DataBindings.Text", "DataBindings.Checked", "DataBindings.ImageLocation", "DataBindings.Value",
-        ];
-
-        for (key, val) in control.properties.iter() {
-            if handled.contains(&key.as_str()) {
-                // Special case: Tag is handled above ONLY if it's an index.
-                // If it's NOT an index, we still want to write it here.
-                if key == "Tag" && control.index.is_some() {
-                    continue;
-                }
-                if key != "Tag" {
-                    continue;
-                }
-            }
-            
-            // Generate assignment: Me.Control.Prop = Value
-            let val_str = match val {
-                crate::properties::PropertyValue::String(s) => format!("\"{}\"", s),
-                crate::properties::PropertyValue::Integer(i) => i.to_string(),
-                crate::properties::PropertyValue::Boolean(b) => if *b { "True".to_string() } else { "False".to_string() },
-                crate::properties::PropertyValue::Double(d) => d.to_string(),
-                crate::properties::PropertyValue::StringArray(_) => continue, // Arrays need special handling usually
-                crate::properties::PropertyValue::Expression(code) => code.clone(),
-            };
-            
-            code.push_str(&format!("        Me.{}.{} = {}\n", field_name, key, val_str));
+    }
+    // Then top-level controls (directly on form)
+    for control in &form.controls {
+        if control.control_type.is_non_visual() {
+            continue;
+        }
+        if control.parent_id.is_none() {
+            let field_name = control_field_name(control);
+            code.push_str(&format!("        Me.Controls.Add(Me.{})\n", field_name));
         }
     }
 
-    // Form properties
+    // ── 4. Form-level properties ───────────────────────────────────────────
     code.push_str(&format!(
         "        Me.ClientSize = New System.Drawing.Size({}, {})\n",
         form.width, form.height
     ));
-    code.push_str(&format!("        Me.Text = \"{}\"\n", form.text));
+    code.push_str(&format!(
+        "        Me.Text = \"{}\"\n",
+        form.text.replace('"', "\"\"")
+    ));
     code.push_str(&format!("        Me.Name = \"{}\"\n", form.name));
+
     if let Some(bc) = &form.back_color {
         code.push_str(&format!(
             "        Me.BackColor = System.Drawing.ColorTranslator.FromHtml(\"{}\")\n",
             bc
         ));
+    } else if let Some(pv) = form.properties.get("BackColor") {
+        if let Some(s) = property_value_to_vbnet(pv) {
+            code.push_str(&format!("        Me.BackColor = {}\n", s));
+        }
     }
+
     if let Some(fc) = &form.fore_color {
         code.push_str(&format!(
             "        Me.ForeColor = System.Drawing.ColorTranslator.FromHtml(\"{}\")\n",
             fc
         ));
+    } else if let Some(pv) = form.properties.get("ForeColor") {
+        if let Some(s) = property_value_to_vbnet(pv) {
+            code.push_str(&format!("        Me.ForeColor = {}\n", s));
+        }
     }
-    if let Some(font_str) = &form.font {
-        let mut parts = font_str.split(',').map(|s| s.trim());
-        let family = parts.next().unwrap_or("Segoe UI");
-        let size_raw = parts.next().unwrap_or("12");
-        let size_clean = size_raw.trim_end_matches("px").trim_end_matches("pt");
-        let size_val: f32 = size_clean.parse().unwrap_or(12.0);
-        code.push_str(&format!(
-            "        Me.Font = New System.Drawing.Font(\"{}\", {}F)\n",
-            family.replace("\"", "\"\""),
-            size_val
-        ));
-    }
-    code.push_str("        Me.ResumeLayout(False)\n");
 
+    if let Some(font_str) = &form.font {
+        code.push_str(&format!(
+            "        Me.Font = {}\n",
+            format_font(font_str)
+        ));
+    } else if let Some(pv) = form.properties.get("Font") {
+        if let Some(s) = property_value_to_vbnet(pv) {
+            code.push_str(&format!("        Me.Font = {}\n", s));
+        }
+    }
+
+    // Arbitrary form-level properties (StartPosition, FormBorderStyle, etc.)
+    let form_base_handled = ["BackColor", "ForeColor", "Font", "ClientSize", "Text", "Name"];
+    let mut form_props: Vec<(&String, &PropertyValue)> = form
+        .properties
+        .iter()
+        .filter(|(k, _)| !form_base_handled.contains(&k.as_str()))
+        .collect();
+    form_props.sort_by_key(|(k, _)| k.as_str());
+    for (key, val) in form_props {
+        if let Some(val_str) = property_value_to_vbnet(val) {
+            code.push_str(&format!("        Me.{} = {}\n", key, val_str));
+        }
+    }
+
+    code.push_str("        Me.ResumeLayout(False)\n");
+    code.push_str("        Me.PerformLayout()\n");
     code.push_str("    End Sub\n");
     code.push_str("End Class\n");
 
     code
+}
+
+/// Properties that are explicitly handled in the visual control section.
+/// These are excluded from the generic arbitrary-property pass to avoid duplicates.
+static VISUAL_HANDLED: &[&str] = &[
+    "Text", "BackColor", "ForeColor", "Font",
+    "Name", "Tag", "TabIndex",
+    // DataBindings keys (all DataBindings.* are handled dynamically)
+    "DataBindings.Source",
+    "DataBindings.Text", "DataBindings.Checked", "DataBindings.ImageLocation", "DataBindings.Value",
+    // Data-source binding
+    "DataSource", "DataMember", "DisplayMember", "ValueMember", "BindingSource",
+    // Vybe-internal runtime keys with no VB.NET designer equivalent
+    "List", "ListValues", "ListIndex", "HTML", "URL", "ToolbarVisible",
+    // CheckState and Value are stored internally; DropDownStyle stored as int but VB.NET expects enum
+    "CheckState", "DropDownStyle",
+];
+
+/// Properties handled in the non-visual component section.
+static NON_VISUAL_HANDLED: &[&str] = &[
+    "DataSource", "DataMember", "Filter", "Sort", "TableName", "DataSetName",
+    "SelectCommand", "ConnectionString", "Name",
+];
+
+/// Emit all properties NOT in the `handled` list as generic VB.NET assignments.
+/// Skips `DataBindings.*` prefix keys (emitted separately as DataBindings.Add calls).
+/// Skips StringArray values (need special container-specific syntax).
+fn emit_arbitrary_props(
+    code: &mut String,
+    field_name: &str,
+    control: &Control,
+    handled: &[&str],
+) {
+    // Sort for deterministic output
+    let mut props: Vec<(&String, &PropertyValue)> = control
+        .properties
+        .iter()
+        .filter(|(key, _)| {
+            // Skip handled properties
+            if handled.contains(&key.as_str()) {
+                // Special case: Tag should still be emitted if it's NOT an array-index tag
+                if *key == "Tag" {
+                    return control.index.is_none(); // only emit if not an array member
+                }
+                return false;
+            }
+            // Skip DataBindings.* — handled by DataBindings.Add
+            if key.starts_with("DataBindings.") {
+                return false;
+            }
+            true
+        })
+        .collect();
+    props.sort_by_key(|(k, _)| k.as_str());
+
+    for (key, val) in props {
+        if let Some(val_str) = property_value_to_vbnet(val) {
+            code.push_str(&format!(
+                "        Me.{}.{} = {}\n",
+                field_name, key, val_str
+            ));
+        }
+    }
 }
 
 /// Generates a minimal user code stub for a new VB.NET form.

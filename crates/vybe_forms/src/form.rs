@@ -1,5 +1,6 @@
 use crate::control::Control;
 use crate::events::EventBinding;
+use crate::properties::PropertyBag;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +17,9 @@ pub struct Form {
     pub fore_color: Option<String>,
     #[serde(default)]
     pub font: Option<String>,
+    /// Arbitrary form-level designer properties (StartPosition, FormBorderStyle, etc.)
+    #[serde(default)]
+    pub properties: PropertyBag,
 }
 
 impl Form {
@@ -31,6 +35,7 @@ impl Form {
             back_color: None,
             fore_color: None,
             font: None,
+            properties: PropertyBag::new(),
         }
     }
 
