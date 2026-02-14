@@ -503,6 +503,66 @@ fn process_side_effects(
                                         "backcolor" => ctrl.set_back_color(value.as_string()),
                                         "forecolor" => ctrl.set_fore_color(value.as_string()),
                                         "font" => ctrl.set_font(value.as_string()),
+                                        // CheckBox / RadioButton
+                                        "checked" => {
+                                            let checked = match &value {
+                                                vybe_runtime::Value::Boolean(b) => *b,
+                                                vybe_runtime::Value::Integer(i) => *i != 0,
+                                                vybe_runtime::Value::String(s) => s == "1" || s.eq_ignore_ascii_case("true"),
+                                                _ => false,
+                                            };
+                                            ctrl.properties.set_raw("Checked", vybe_forms::PropertyValue::Boolean(checked));
+                                            use vybe_forms::properties::PropertyValue as PV;
+                                            ctrl.properties.set_raw("Value", PV::Integer(if checked { 1 } else { 0 }));
+                                            if let Ok(Value::Object(form_obj)) = interp.env.get("__form_instance__") {
+                                                let form_borrow = form_obj.borrow();
+                                                if let Some(Value::Object(ctrl_obj)) = form_borrow.fields.get(&control_part.to_lowercase()) {
+                                                    ctrl_obj.borrow_mut().fields.insert("checked".to_string(), Value::Boolean(checked));
+                                                }
+                                            }
+                                        }
+                                        // NumericUpDown, TrackBar, Scrollbars
+                                        "value" => {
+                                            let ival = match &value {
+                                                vybe_runtime::Value::Integer(i) => *i,
+                                                vybe_runtime::Value::Double(d) => *d as i32,
+                                                vybe_runtime::Value::String(s) => s.parse().unwrap_or(0),
+                                                _ => 0,
+                                            };
+                                            ctrl.properties.set_raw("Value", vybe_forms::PropertyValue::Integer(ival));
+                                            if let Ok(Value::Object(form_obj)) = interp.env.get("__form_instance__") {
+                                                let form_borrow = form_obj.borrow();
+                                                if let Some(Value::Object(ctrl_obj)) = form_borrow.fields.get(&control_part.to_lowercase()) {
+                                                    ctrl_obj.borrow_mut().fields.insert("value".to_string(), Value::Integer(ival));
+                                                }
+                                            }
+                                        }
+                                        // ComboBox / ListBox selected index
+                                        "selectedindex" => {
+                                            let idx = match &value {
+                                                vybe_runtime::Value::Integer(i) => *i,
+                                                vybe_runtime::Value::String(s) => s.parse().unwrap_or(-1),
+                                                _ => -1,
+                                            };
+                                            ctrl.properties.set_raw("SelectedIndex", vybe_forms::PropertyValue::Integer(idx));
+                                            if let Ok(Value::Object(form_obj)) = interp.env.get("__form_instance__") {
+                                                let form_borrow = form_obj.borrow();
+                                                if let Some(Value::Object(ctrl_obj)) = form_borrow.fields.get(&control_part.to_lowercase()) {
+                                                    ctrl_obj.borrow_mut().fields.insert("selectedindex".to_string(), Value::Integer(idx));
+                                                }
+                                            }
+                                        }
+                                        // ComboBox / ListBox selected value (map to text)
+                                        "selectedvalue" => {
+                                            let sv = value.as_string();
+                                            ctrl.set_text(sv.clone());
+                                            if let Ok(Value::Object(form_obj)) = interp.env.get("__form_instance__") {
+                                                let form_borrow = form_obj.borrow();
+                                                if let Some(Value::Object(ctrl_obj)) = form_borrow.fields.get(&control_part.to_lowercase()) {
+                                                    ctrl_obj.borrow_mut().fields.insert("text".to_string(), Value::String(sv));
+                                                }
+                                            }
+                                        }
                                         "url" => {
                                             ctrl.properties.set("URL", value.as_string());
                                             let url = value.as_string();
@@ -963,7 +1023,25 @@ pub fn FormRunner() -> Element {
                                             position,
                                             count,
                                         });
+                                        // Refresh DataBindings.Add bound controls (TextBox, Label, CheckBox, etc.)
                                         interp.refresh_bindings_filtered(&ctrl_obj, &ds, position);
+                                        // Emit DataSourceChanged for controls bound via DataSource = bs
+                                        // (DataGridView, ComboBox, ListBox, etc.)
+                                        let bound_controls: Vec<String> = ctrl_obj.borrow()
+                                            .fields.get("__bound_controls")
+                                            .and_then(|v| if let Value::Array(arr) = v {
+                                                Some(arr.iter().filter_map(|v| if let Value::String(s) = v { Some(s.clone()) } else { None }).collect())
+                                            } else { None })
+                                            .unwrap_or_default();
+                                        let bs_val = Value::Object(ctrl_obj.clone());
+                                        for bound_ctrl_name in bound_controls {
+                                            let (columns, rows) = interp.get_datasource_table_data_filtered(&bs_val);
+                                            interp.side_effects.push_back(RuntimeSideEffect::DataSourceChanged {
+                                                control_name: bound_ctrl_name,
+                                                columns,
+                                                rows,
+                                            });
+                                        }
                                     }
                                 }
                                 if !interp.side_effects.is_empty() {

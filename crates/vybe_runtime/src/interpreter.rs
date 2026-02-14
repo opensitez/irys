@@ -12186,7 +12186,7 @@ impl Interpreter {
     }
 
     /// Get columns+rows for DataGridView, applying BindingSource filter/sort.
-    fn get_datasource_table_data_filtered(&self, datasource: &Value) -> (Vec<String>, Vec<Vec<String>>) {
+    pub fn get_datasource_table_data_filtered(&self, datasource: &Value) -> (Vec<String>, Vec<Vec<String>>) {
         if let Value::Object(obj_ref) = datasource {
             let obj = obj_ref.borrow();
             let dt_type = obj.fields.get("__type")
