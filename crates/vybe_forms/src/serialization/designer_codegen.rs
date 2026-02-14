@@ -56,6 +56,17 @@ pub fn control_type_to_vbnet(ct: &ControlType) -> &str {
         ControlType::DataSetComponent => "System.Data.DataSet",
         ControlType::DataTableComponent => "System.Data.DataTable",
         ControlType::DataAdapterComponent => "System.Data.SqlClient.SqlDataAdapter",
+        ControlType::Timer => "System.Windows.Forms.Timer",
+        ControlType::ImageList => "System.Windows.Forms.ImageList",
+        ControlType::ErrorProvider => "System.Windows.Forms.ErrorProvider",
+        ControlType::OpenFileDialog => "System.Windows.Forms.OpenFileDialog",
+        ControlType::SaveFileDialog => "System.Windows.Forms.SaveFileDialog",
+        ControlType::FolderBrowserDialog => "System.Windows.Forms.FolderBrowserDialog",
+        ControlType::FontDialog => "System.Windows.Forms.FontDialog",
+        ControlType::ColorDialog => "System.Windows.Forms.ColorDialog",
+        ControlType::PrintDialog => "System.Windows.Forms.PrintDialog",
+        ControlType::PrintDocument => "System.Drawing.Printing.PrintDocument",
+        ControlType::NotifyIcon => "System.Windows.Forms.NotifyIcon",
         ControlType::Custom(s) => s.as_str(),
     }
 }
@@ -396,7 +407,25 @@ pub fn generate_designer_code(form: &Form) -> String {
         }
     }
 
-    // ── 4. Form-level properties ───────────────────────────────────────────
+    // ── 4. Event wiring via AddHandler (designer-persisted bindings) ──────
+    // These are emitted for events wired in InitializeComponent rather than via Handles clauses.
+    for binding in &form.event_bindings {
+        // Resolve the field name for the control (handles array members)
+        let field_name = form
+            .controls
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(&binding.control_name))
+            .map(|c| control_field_name(c))
+            .unwrap_or_else(|| binding.control_name.clone());
+        code.push_str(&format!(
+            "        AddHandler Me.{}.{}, AddressOf Me.{}\n",
+            field_name,
+            binding.event_type.as_str(),
+            binding.handler_name
+        ));
+    }
+
+    // ── 5. Form-level properties ───────────────────────────────────────────
     code.push_str(&format!(
         "        Me.ClientSize = New System.Drawing.Size({}, {})\n",
         form.width, form.height

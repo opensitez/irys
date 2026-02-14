@@ -73,6 +73,20 @@ pub enum ControlType {
     DataSetComponent,
     DataTableComponent,
     DataAdapterComponent,
+    // Non-visual infrastructure components
+    Timer,
+    ImageList,
+    ErrorProvider,
+    // Dialog components (non-visual, show as dialogs at runtime)
+    OpenFileDialog,
+    SaveFileDialog,
+    FolderBrowserDialog,
+    FontDialog,
+    ColorDialog,
+    PrintDialog,
+    PrintDocument,
+    // Notification / system tray
+    NotifyIcon,
     // Arbitrary custom control type (fully qualified name)
     Custom(String),
 }
@@ -118,6 +132,19 @@ impl ControlType {
             "hscrollbar" => Some(ControlType::HScrollBar),
             "vscrollbar" => Some(ControlType::VScrollBar),
             "tooltip" => Some(ControlType::ToolTip),
+            // Non-visual infrastructure
+            "timer" => Some(ControlType::Timer),
+            "imagelist" => Some(ControlType::ImageList),
+            "errorprovider" => Some(ControlType::ErrorProvider),
+            // Dialogs
+            "openfiledialog" => Some(ControlType::OpenFileDialog),
+            "savefiledialog" => Some(ControlType::SaveFileDialog),
+            "folderbrowserdialog" => Some(ControlType::FolderBrowserDialog),
+            "fontdialog" => Some(ControlType::FontDialog),
+            "colordialog" => Some(ControlType::ColorDialog),
+            "printdialog" => Some(ControlType::PrintDialog),
+            "printdocument" => Some(ControlType::PrintDocument),
+            "notifyicon" => Some(ControlType::NotifyIcon),
             _ => Some(ControlType::Custom(name.to_string())),
         }
     }
@@ -165,6 +192,17 @@ impl ControlType {
             ControlType::DataSetComponent => "DataSet",
             ControlType::DataTableComponent => "DataTable",
             ControlType::DataAdapterComponent => "DataAdapter",
+            ControlType::Timer => "Timer",
+            ControlType::ImageList => "ImageList",
+            ControlType::ErrorProvider => "ErrorProvider",
+            ControlType::OpenFileDialog => "OpenFileDialog",
+            ControlType::SaveFileDialog => "SaveFileDialog",
+            ControlType::FolderBrowserDialog => "FolderBrowserDialog",
+            ControlType::FontDialog => "FontDialog",
+            ControlType::ColorDialog => "ColorDialog",
+            ControlType::PrintDialog => "PrintDialog",
+            ControlType::PrintDocument => "PrintDocument",
+            ControlType::NotifyIcon => "NotifyIcon",
             ControlType::Custom(s) => s.as_str(),
         }
     }
@@ -175,7 +213,18 @@ impl ControlType {
             ControlType::BindingSourceComponent |
             ControlType::DataSetComponent |
             ControlType::DataTableComponent |
-            ControlType::DataAdapterComponent
+            ControlType::DataAdapterComponent |
+            ControlType::Timer |
+            ControlType::ImageList |
+            ControlType::ErrorProvider |
+            ControlType::OpenFileDialog |
+            ControlType::SaveFileDialog |
+            ControlType::FolderBrowserDialog |
+            ControlType::FontDialog |
+            ControlType::ColorDialog |
+            ControlType::PrintDialog |
+            ControlType::PrintDocument |
+            ControlType::NotifyIcon
         )
     }
 
@@ -233,6 +282,17 @@ impl ControlType {
             ControlType::DataSetComponent => "ds",
             ControlType::DataTableComponent => "dt",
             ControlType::DataAdapterComponent => "da",
+            ControlType::Timer => "tmr",
+            ControlType::ImageList => "il",
+            ControlType::ErrorProvider => "ep",
+            ControlType::OpenFileDialog => "ofd",
+            ControlType::SaveFileDialog => "sfd",
+            ControlType::FolderBrowserDialog => "fbd",
+            ControlType::FontDialog => "fd",
+            ControlType::ColorDialog => "cd",
+            ControlType::PrintDialog => "pd",
+            ControlType::PrintDocument => "pdoc",
+            ControlType::NotifyIcon => "ni",
             ControlType::Custom(_) => "ctrl",
         }
     }
@@ -280,6 +340,17 @@ impl ControlType {
             ControlType::DataSetComponent => (32, 32),
             ControlType::DataTableComponent => (32, 32),
             ControlType::DataAdapterComponent => (32, 32),
+            ControlType::Timer => (32, 32),
+            ControlType::ImageList => (32, 32),
+            ControlType::ErrorProvider => (32, 32),
+            ControlType::OpenFileDialog => (32, 32),
+            ControlType::SaveFileDialog => (32, 32),
+            ControlType::FolderBrowserDialog => (32, 32),
+            ControlType::FontDialog => (32, 32),
+            ControlType::ColorDialog => (32, 32),
+            ControlType::PrintDialog => (32, 32),
+            ControlType::PrintDocument => (32, 32),
+            ControlType::NotifyIcon => (32, 32),
             ControlType::Custom(_) => (100, 100),
         }
     }

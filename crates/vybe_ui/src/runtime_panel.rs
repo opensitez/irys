@@ -704,7 +704,21 @@ fn process_side_effects(
             RuntimeSideEffect::FormClose { form_name } => {
                 // Fire FormClosing event, check Cancel, then fire FormClosed, then hide
                 let closing_args = interp.make_event_handler_args(&form_name, "FormClosing");
-                let _ = interp.call_event_handler(&format!("{}_FormClosing", form_name), &closing_args);
+                let form_name_lower = form_name.to_lowercase();
+                // Dispatch using get_event_handlers (Handles clause + AddHandler) first,
+                // then fall back to conventional Form1_FormClosing naming.
+                let closing_handlers = interp.get_event_handlers(&form_name_lower, "Me", "FormClosing");
+                if let Ok(Value::Object(form_obj)) = interp.env.get("__form_instance__") {
+                    if !closing_handlers.is_empty() {
+                        for handler in &closing_handlers {
+                            let _ = interp.call_method_on_object(&form_obj, handler, &closing_args);
+                        }
+                    } else {
+                        let _ = interp.call_method_on_object(&form_obj, &format!("{}_FormClosing", form_name), &closing_args);
+                    }
+                } else {
+                    let _ = interp.call_event_handler(&format!("{}_FormClosing", form_name), &closing_args);
+                }
                 // Check if Cancel was set to True on the EventArgs
                 let cancel = if let Value::Object(ref ea) = closing_args[1] {
                     ea.borrow().fields.get("cancel").map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false)
@@ -713,7 +727,18 @@ fn process_side_effects(
                 };
                 if !cancel {
                     let closed_args = interp.make_event_handler_args(&form_name, "FormClosed");
-                    let _ = interp.call_event_handler(&format!("{}_FormClosed", form_name), &closed_args);
+                    let closed_handlers = interp.get_event_handlers(&form_name_lower, "Me", "FormClosed");
+                    if let Ok(Value::Object(form_obj)) = interp.env.get("__form_instance__") {
+                        if !closed_handlers.is_empty() {
+                            for handler in &closed_handlers {
+                                let _ = interp.call_method_on_object(&form_obj, handler, &closed_args);
+                            }
+                        } else {
+                            let _ = interp.call_method_on_object(&form_obj, &format!("{}_FormClosed", form_name), &closed_args);
+                        }
+                    } else {
+                        let _ = interp.call_event_handler(&format!("{}_FormClosed", form_name), &closed_args);
+                    }
                     // Hide the form — read first, then set
                     let should_close = runtime_form.read().as_ref()
                         .map(|frm| frm.name.eq_ignore_ascii_case(&form_name))

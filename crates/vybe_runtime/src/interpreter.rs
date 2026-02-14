@@ -326,6 +326,45 @@ impl Interpreter {
         self.env.define("dbnull", dbnull_obj);
         // Register ConsoleColor enum globally
         self.env.define("consolecolor", cc_obj);
+
+        // ── My.Application ─────────────────────────────────────────────────────
+        // Provides My.Application.Info.Title/Version, My.Application.DoEvents(), etc.
+        let mut info_fields = HashMap::new();
+        info_fields.insert("title".to_string(), Value::String(String::new()));
+        info_fields.insert("version".to_string(), Value::String("1.0.0.0".to_string()));
+        info_fields.insert("productname".to_string(), Value::String(String::new()));
+        info_fields.insert("companyname".to_string(), Value::String(String::new()));
+        info_fields.insert("copyright".to_string(), Value::String(String::new()));
+        info_fields.insert("description".to_string(), Value::String(String::new()));
+        let info_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "My.Application.Info".to_string(),
+            fields: info_fields,
+        })));
+
+        let mut cmd_args_fields = HashMap::new();
+        cmd_args_fields.insert("count".to_string(), Value::Integer(0));
+        let cmd_args_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "CommandLineArgs".to_string(),
+            fields: cmd_args_fields,
+        })));
+
+        let mut my_app_fields = HashMap::new();
+        my_app_fields.insert("info".to_string(), info_obj);
+        my_app_fields.insert("commandlineargs".to_string(), cmd_args_obj);
+        let my_app_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "My.Application".to_string(),
+            fields: my_app_fields,
+        })));
+
+        // Create the My namespace with Application; Resources added later by register_resource_entries
+        let mut my_fields = HashMap::new();
+        my_fields.insert("application".to_string(), my_app_obj.clone());
+        let my_obj = Value::Object(Rc::new(RefCell::new(ObjectData {
+            class_name: "My".to_string(),
+            fields: my_fields,
+        })));
+        self.env.define("my", my_obj);
+        self.env.define("my.application", my_app_obj);
     }
 
     // ── Console helpers ──────────────────────────────────────────────────
@@ -6404,8 +6443,12 @@ impl Interpreter {
             "application.run" | "system.windows.forms.application.run" => {
                 return self.dispatch_application_method("run", &arg_values);
             }
-            "application.exit" | "system.windows.forms.application.exit" => {
+            "application.exit" | "system.windows.forms.application.exit"
+            | "my.application.exit" => {
                 return self.dispatch_application_method("exit", &arg_values);
+            }
+            "my.application.doevents" => {
+                return self.dispatch_application_method("doevents", &arg_values);
             }
 
             "callbyname" | "microsoft.visualbasic.interaction.callbyname" => {
@@ -10776,7 +10819,7 @@ impl Interpreter {
                     return self.dispatch_path_method(&method_name, &arg_values);
                 } else if class_name_lower == "system.console" {
                     return self.dispatch_console_method(&method_name, &arg_values);
-                } else if class_name_lower == "application" {
+                } else if class_name_lower == "application" || class_name_lower == "my.application" {
                     return self.dispatch_application_method(&method_name, &arg_values);
                 } else if class_name_lower == "system.math" {
                     return self.dispatch_math_method(&method_name, &arg_values);

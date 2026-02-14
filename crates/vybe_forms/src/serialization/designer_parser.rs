@@ -1,4 +1,5 @@
 use crate::control::{Control, ControlType};
+use crate::events::{EventBinding, EventType};
 use crate::form::Form;
 use vybe_parser::{ClassDecl, Expression, Statement};
 
@@ -54,6 +55,20 @@ pub fn vbnet_type_to_control_type(name: &str) -> Option<ControlType> {
         "dataset" => Some(ControlType::DataSetComponent),
         "datatable" => Some(ControlType::DataTableComponent),
         "sqldataadapter" | "dataadapter" | "oledbdataadapter" => Some(ControlType::DataAdapterComponent),
+        // Non-visual infrastructure components
+        "timer" => Some(ControlType::Timer),
+        "imagelist" => Some(ControlType::ImageList),
+        "errorprovider" => Some(ControlType::ErrorProvider),
+        // Dialog components
+        "openfiledialog" => Some(ControlType::OpenFileDialog),
+        "savefiledialog" => Some(ControlType::SaveFileDialog),
+        "folderbrowserdialog" => Some(ControlType::FolderBrowserDialog),
+        "fontdialog" => Some(ControlType::FontDialog),
+        "colordialog" => Some(ControlType::ColorDialog),
+        "printdialog" => Some(ControlType::PrintDialog),
+        "printdocument" => Some(ControlType::PrintDocument),
+        // Notification / system tray
+        "notifyicon" => Some(ControlType::NotifyIcon),
         _ => Some(ControlType::Custom(name.to_string())),
     }
 }
@@ -251,10 +266,10 @@ pub fn extract_form_from_designer(class_decl: &ClassDecl) -> Option<Form> {
                             form.properties.set_raw("Font", expr_to_property_value(value));
                         }
                     }
-                    // Properties we deliberately ignore at parse time (runtime handles them
-                    // or they are purely designer metadata with no runtime effect)
+                    // Properties we deliberately ignore at parse time (purely designer
+                    // metadata with no runtime effect in Vybe)
                     "autoscaledimensions" | "autoscalemode" | "padding" | "margin"
-                    | "minimumsize" | "maximumsize" | "icon" | "transparencykey"
+                    | "minimumsize" | "maximumsize" | "transparencykey"
                     | "topmost" | "opacity" => {}
                     _ => {
                         if let Expression::New(type_id, _) = value {
@@ -360,7 +375,36 @@ pub fn extract_form_from_designer(class_decl: &ClassDecl) -> Option<Form> {
                 }
             }
 
+            // ── AddHandler Me.ctrl.Event, AddressOf Me.Handler ────────────
+            // Wires events explicitly in InitializeComponent (alternative to Handles clause)
+            Statement::AddHandler { event_target, handler } => {
+                // Normalize: strip leading "Me." from both sides
+                let target = if event_target.to_lowercase().starts_with("me.") {
+                    &event_target[3..]
+                } else {
+                    event_target.as_str()
+                };
+                let handler_name = if handler.to_lowercase().starts_with("me.") {
+                    handler[3..].to_string()
+                } else {
+                    handler.clone()
+                };
+                // Split on last '.' → (control_name, event_name)
+                if let Some(dot_pos) = target.rfind('.') {
+                    let ctrl_name = &target[..dot_pos];
+                    let event_name = &target[dot_pos + 1..];
+                    if let Some(event_type) = EventType::from_name(event_name) {
+                        form.event_bindings.push(EventBinding::with_handler(
+                            ctrl_name,
+                            event_type,
+                            handler_name,
+                        ));
+                    }
+                }
+            }
+
             // Skip other call statements (SuspendLayout, ResumeLayout, PerformLayout, etc.)
+            // Also skip local variable declarations (e.g. Dim resources As ComponentResourceManager)
             Statement::ExpressionStatement(_) | Statement::Call { .. } => {}
             _ => {}
         }
