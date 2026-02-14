@@ -1551,7 +1551,6 @@ impl Interpreter {
                                     s_lower == "webbrowser" ||
                                     s_lower == "errorprovider" ||
                                     s_lower == "tooltip" ||
-                                    s_lower == "backgroundworker" ||
                                     s_lower == "bindingnavigator" ||
                                     s_lower == "bindingsource" ||
                                     s_lower == "component" ||
@@ -1913,7 +1912,7 @@ impl Interpreter {
                                 "timer" | "toolstrip" | "menustrip" | "statusstrip" | "tabcontrol" |
                                 "richtextbox" | "progressbar" | "trackbar" | "numericupdown" |
                                 "datetimepicker" | "monthcalendar" | "treeview" | "listview" |
-                                "webbrowser" | "errorprovider" | "tooltip" | "backgroundworker" |
+                                "webbrowser" | "errorprovider" | "tooltip" |
                                 "datagridview" | "bindingnavigator" | "bindingsource" |
                                 "flowlayoutpanel" | "tablelayoutpanel" | "splitcontainer" |
                                 "maskedtextbox" | "domainupdown" | "contextmenustrip" |
@@ -2380,9 +2379,32 @@ impl Interpreter {
                     } else {
                         handler.clone()
                     };
-                    // Register in the event system
-                    if let Some(event_type) = vybe_forms::EventType::from_name(&event) {
-                        self.events.register_handler(&control, &event_type, &handler_name);
+
+                    // Check if the control is a BackgroundWorker object — store handler on object
+                    let event_lower = event.to_lowercase();
+                    let is_bgw = if let Ok(val) = self.env.get(&control) {
+                        if let Value::Object(ref obj_ref) = val {
+                            let tn = obj_ref.borrow().fields.get("__type").map(|v| v.as_string()).unwrap_or_default();
+                            if tn == "BackgroundWorker" {
+                                let field_key = match event_lower.as_str() {
+                                    "dowork" => Some("__dowork_handler"),
+                                    "progresschanged" => Some("__progresschanged_handler"),
+                                    "runworkercompleted" => Some("__runworkercompleted_handler"),
+                                    _ => None,
+                                };
+                                if let Some(key) = field_key {
+                                    obj_ref.borrow_mut().fields.insert(key.to_string(), Value::String(handler_name.clone()));
+                                }
+                                true
+                            } else { false }
+                        } else { false }
+                    } else { false };
+
+                    if !is_bgw {
+                        // Register in the event system (WinForms)
+                        if let Some(event_type) = vybe_forms::EventType::from_name(&event) {
+                            self.events.register_handler(&control, &event_type, &handler_name);
+                        }
                     }
                 }
                 Ok(())
@@ -4004,6 +4026,22 @@ impl Interpreter {
                     fields.insert("__start_ms".to_string(), Value::Long(0));
                     fields.insert("__accumulated_ms".to_string(), Value::Long(0));
                     let obj = crate::value::ObjectData { class_name: "Stopwatch".to_string(), fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+
+                // System.ComponentModel.BackgroundWorker (standalone, not WinForms)
+                if class_name == "backgroundworker" || class_name == "system.componentmodel.backgroundworker" {
+                    let mut fields = std::collections::HashMap::new();
+                    fields.insert("__type".to_string(), Value::String("BackgroundWorker".to_string()));
+                    fields.insert("isbusy".to_string(), Value::Boolean(false));
+                    fields.insert("cancellationpending".to_string(), Value::Boolean(false));
+                    fields.insert("workerreportsprogress".to_string(), Value::Boolean(false));
+                    fields.insert("workersupportscancellation".to_string(), Value::Boolean(false));
+                    // Event handler name storage (populated by AddHandler or direct assignment)
+                    fields.insert("__dowork_handler".to_string(), Value::Nothing);
+                    fields.insert("__progresschanged_handler".to_string(), Value::Nothing);
+                    fields.insert("__runworkercompleted_handler".to_string(), Value::Nothing);
+                    let obj = crate::value::ObjectData { class_name: "BackgroundWorker".to_string(), fields };
                     return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
                 }
 
@@ -6744,6 +6782,141 @@ impl Interpreter {
                                 obj_ref.borrow_mut().fields.insert("elapsedmilliseconds".to_string(), Value::Long(0));
                                 obj_ref.borrow_mut().fields.insert("isrunning".to_string(), Value::Boolean(true));
                                 return Ok(Value::Nothing);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // BackgroundWorker instance methods (sync fallback — single-threaded)
+                    if type_name == "BackgroundWorker" {
+                        let arg_values: Result<Vec<Value>, RuntimeError> = args.iter()
+                            .map(|arg| self.evaluate_expr(arg))
+                            .collect();
+                        let arg_values = arg_values?;
+                        let sender_val = Value::Object(obj_ref.clone());
+                        match method_name.as_str() {
+                            "runworkerasync" => {
+                                // Set IsBusy = True
+                                obj_ref.borrow_mut().fields.insert("isbusy".to_string(), Value::Boolean(true));
+                                obj_ref.borrow_mut().fields.insert("cancellationpending".to_string(), Value::Boolean(false));
+
+                                // Get the argument passed to RunWorkerAsync (if any)
+                                let worker_arg = arg_values.get(0).cloned().unwrap_or(Value::Nothing);
+
+                                // Create DoWorkEventArgs
+                                let mut dw_fields = std::collections::HashMap::new();
+                                dw_fields.insert("__type".to_string(), Value::String("DoWorkEventArgs".to_string()));
+                                dw_fields.insert("argument".to_string(), worker_arg);
+                                dw_fields.insert("cancel".to_string(), Value::Boolean(false));
+                                dw_fields.insert("result".to_string(), Value::Nothing);
+                                let dw_args = Value::Object(std::rc::Rc::new(std::cell::RefCell::new(
+                                    crate::value::ObjectData { class_name: "DoWorkEventArgs".to_string(), fields: dw_fields }
+                                )));
+
+                                // Fire DoWork handler
+                                let dowork_handler = obj_ref.borrow().fields.get("__dowork_handler").cloned().unwrap_or(Value::Nothing);
+                                if let Value::String(handler_name) = &dowork_handler {
+                                    if !handler_name.is_empty() {
+                                        let handler_lower = handler_name.to_lowercase();
+                                        if let Some(sub) = self.subs.get(&handler_lower).cloned() {
+                                            let _ = self.call_user_sub(&sub, &[sender_val.clone(), dw_args.clone()], None);
+                                        }
+                                    }
+                                } else if let Value::Lambda { .. } = &dowork_handler {
+                                    let _ = self.call_lambda(dowork_handler.clone(), &[sender_val.clone(), dw_args.clone()]);
+                                }
+
+                                // Get result from DoWorkEventArgs
+                                let dw_result = if let Value::Object(ref dw_ref) = dw_args {
+                                    dw_ref.borrow().fields.get("result").cloned().unwrap_or(Value::Nothing)
+                                } else {
+                                    Value::Nothing
+                                };
+                                let was_cancelled = if let Value::Object(ref dw_ref) = dw_args {
+                                    dw_ref.borrow().fields.get("cancel").map(|v| v.is_truthy()).unwrap_or(false)
+                                } else {
+                                    false
+                                };
+
+                                // Create RunWorkerCompletedEventArgs
+                                let mut rw_fields = std::collections::HashMap::new();
+                                rw_fields.insert("__type".to_string(), Value::String("RunWorkerCompletedEventArgs".to_string()));
+                                rw_fields.insert("result".to_string(), dw_result);
+                                rw_fields.insert("cancelled".to_string(), Value::Boolean(was_cancelled));
+                                rw_fields.insert("error".to_string(), Value::Nothing);
+                                let rw_args = Value::Object(std::rc::Rc::new(std::cell::RefCell::new(
+                                    crate::value::ObjectData { class_name: "RunWorkerCompletedEventArgs".to_string(), fields: rw_fields }
+                                )));
+
+                                // Fire RunWorkerCompleted handler
+                                let completed_handler = obj_ref.borrow().fields.get("__runworkercompleted_handler").cloned().unwrap_or(Value::Nothing);
+                                if let Value::String(handler_name) = &completed_handler {
+                                    if !handler_name.is_empty() {
+                                        let handler_lower = handler_name.to_lowercase();
+                                        if let Some(sub) = self.subs.get(&handler_lower).cloned() {
+                                            let _ = self.call_user_sub(&sub, &[sender_val.clone(), rw_args], None);
+                                        }
+                                    }
+                                } else if let Value::Lambda { .. } = &completed_handler {
+                                    let _ = self.call_lambda(completed_handler.clone(), &[sender_val.clone(), rw_args]);
+                                }
+
+                                // Set IsBusy = False
+                                obj_ref.borrow_mut().fields.insert("isbusy".to_string(), Value::Boolean(false));
+                                return Ok(Value::Nothing);
+                            }
+                            "reportprogress" => {
+                                let percent = arg_values.get(0).map(|v| v.as_integer().unwrap_or(0)).unwrap_or(0);
+                                let user_state = arg_values.get(1).cloned().unwrap_or(Value::Nothing);
+
+                                // Create ProgressChangedEventArgs
+                                let mut pc_fields = std::collections::HashMap::new();
+                                pc_fields.insert("__type".to_string(), Value::String("ProgressChangedEventArgs".to_string()));
+                                pc_fields.insert("progresspercentage".to_string(), Value::Integer(percent));
+                                pc_fields.insert("userstate".to_string(), user_state);
+                                let pc_args = Value::Object(std::rc::Rc::new(std::cell::RefCell::new(
+                                    crate::value::ObjectData { class_name: "ProgressChangedEventArgs".to_string(), fields: pc_fields }
+                                )));
+
+                                // Fire ProgressChanged handler
+                                let progress_handler = obj_ref.borrow().fields.get("__progresschanged_handler").cloned().unwrap_or(Value::Nothing);
+                                if let Value::String(handler_name) = &progress_handler {
+                                    if !handler_name.is_empty() {
+                                        let handler_lower = handler_name.to_lowercase();
+                                        if let Some(sub) = self.subs.get(&handler_lower).cloned() {
+                                            let _ = self.call_user_sub(&sub, &[sender_val.clone(), pc_args], None);
+                                        }
+                                    }
+                                } else if let Value::Lambda { .. } = &progress_handler {
+                                    let _ = self.call_lambda(progress_handler.clone(), &[sender_val.clone(), pc_args]);
+                                }
+                                return Ok(Value::Nothing);
+                            }
+                            "cancelasync" => {
+                                obj_ref.borrow_mut().fields.insert("cancellationpending".to_string(), Value::Boolean(true));
+                                return Ok(Value::Nothing);
+                            }
+                            "dispose" => {
+                                return Ok(Value::Nothing);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Process instance methods
+                    if type_name == "Process" {
+                        match method_name.as_str() {
+                            "waitforexit" => {
+                                // In sync mode, the process was spawned and detached. No-op.
+                                return Ok(Value::Nothing);
+                            }
+                            "kill" | "close" | "dispose" => {
+                                obj_ref.borrow_mut().fields.insert("hasexited".to_string(), Value::Boolean(true));
+                                return Ok(Value::Nothing);
+                            }
+                            "start" => {
+                                // Instance Start() — no-op, already started
+                                return Ok(Value::Boolean(true));
                             }
                             _ => {}
                         }
@@ -9571,6 +9744,173 @@ impl Interpreter {
             }
             "threadpool.setmaxthreads" | "system.threading.threadpool.setmaxthreads" => {
                 return Ok(Value::Boolean(true));
+            }
+
+            // ===== INTERLOCKED (SYNCHRONOUS — single-threaded interpreter) =====
+            "interlocked.increment" | "system.threading.interlocked.increment" => {
+                // Interlocked.Increment(ByRef variable) — increment and return new value
+                // In vybe, args[0] is a Variable expression that was already evaluated
+                // We need the variable name to update it. Use a fallback: get the value, increment, return.
+                if let Some(Expression::Variable(var_name)) = args.get(0) {
+                    let current = self.env.get(var_name.as_str()).unwrap_or(Value::Integer(0));
+                    let new_val = match current {
+                        Value::Integer(i) => Value::Integer(i + 1),
+                        Value::Long(l) => Value::Long(l + 1),
+                        _ => Value::Integer(current.as_integer().unwrap_or(0) + 1),
+                    };
+                    let _ = self.env.set(var_name.as_str(), new_val.clone());
+                    return Ok(new_val);
+                }
+                // Fallback: just return arg + 1
+                let val = arg_values.get(0).map(|v| v.as_integer().unwrap_or(0)).unwrap_or(0);
+                return Ok(Value::Integer(val + 1));
+            }
+            "interlocked.decrement" | "system.threading.interlocked.decrement" => {
+                if let Some(Expression::Variable(var_name)) = args.get(0) {
+                    let current = self.env.get(var_name.as_str()).unwrap_or(Value::Integer(0));
+                    let new_val = match current {
+                        Value::Integer(i) => Value::Integer(i - 1),
+                        Value::Long(l) => Value::Long(l - 1),
+                        _ => Value::Integer(current.as_integer().unwrap_or(0) - 1),
+                    };
+                    let _ = self.env.set(var_name.as_str(), new_val.clone());
+                    return Ok(new_val);
+                }
+                let val = arg_values.get(0).map(|v| v.as_integer().unwrap_or(0)).unwrap_or(0);
+                return Ok(Value::Integer(val - 1));
+            }
+            "interlocked.exchange" | "system.threading.interlocked.exchange" => {
+                // Interlocked.Exchange(ByRef location, value) — sets location = value, returns old
+                if let Some(Expression::Variable(var_name)) = args.get(0) {
+                    let old_val = self.env.get(var_name.as_str()).unwrap_or(Value::Nothing);
+                    let new_val = arg_values.get(1).cloned().unwrap_or(Value::Nothing);
+                    let _ = self.env.set(var_name.as_str(), new_val);
+                    return Ok(old_val);
+                }
+                return Ok(arg_values.get(0).cloned().unwrap_or(Value::Nothing));
+            }
+            "interlocked.compareexchange" | "system.threading.interlocked.compareexchange" => {
+                // Interlocked.CompareExchange(ByRef location, value, comparand)
+                // If location == comparand, sets location = value. Returns old value of location.
+                if let Some(Expression::Variable(var_name)) = args.get(0) {
+                    let old_val = self.env.get(var_name.as_str()).unwrap_or(Value::Nothing);
+                    let new_val = arg_values.get(1).cloned().unwrap_or(Value::Nothing);
+                    let comparand = arg_values.get(2).cloned().unwrap_or(Value::Nothing);
+                    if old_val == comparand {
+                        let _ = self.env.set(var_name.as_str(), new_val);
+                    }
+                    return Ok(old_val);
+                }
+                return Ok(arg_values.get(0).cloned().unwrap_or(Value::Nothing));
+            }
+
+            // ===== ACTIVATOR.CREATEINSTANCE =====
+            "activator.createinstance" | "system.activator.createinstance" => {
+                // Activator.CreateInstance(typeName) — create an instance of a class by name
+                let type_name = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                let type_lower = type_name.to_lowercase();
+                // Check if it's a known class
+                if let Some(class) = self.classes.get(&type_lower).cloned() {
+                    // Create an instance using the class definition
+                    let mut fields = std::collections::HashMap::new();
+                    let class_name_str = class.name.as_str().to_string();
+                    fields.insert("__type".to_string(), Value::String(class_name_str.clone()));
+                    // Initialize fields from class definition
+                    for field in &class.fields {
+                        let field_name = field.name.as_str().to_lowercase();
+                        let default_val = if let Some(init) = &field.initializer {
+                            self.evaluate_expr(init).unwrap_or(Value::Nothing)
+                        } else {
+                            Value::Nothing
+                        };
+                        fields.insert(field_name, default_val);
+                    }
+                    let obj = crate::value::ObjectData { class_name: class_name_str, fields };
+                    return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                }
+                // Check built-in types
+                match type_lower.as_str() {
+                    "arraylist" | "system.collections.arraylist" => {
+                        return Ok(Value::Collection(std::rc::Rc::new(std::cell::RefCell::new(
+                            crate::collections::ArrayList::new()
+                        ))));
+                    }
+                    "dictionary" | "system.collections.generic.dictionary" | "hashtable" => {
+                        return Ok(Value::Dictionary(std::rc::Rc::new(std::cell::RefCell::new(
+                            crate::collections::VBDictionary::new()
+                        ))));
+                    }
+                    "stringbuilder" | "system.text.stringbuilder" => {
+                        let mut fields = std::collections::HashMap::new();
+                        fields.insert("__type".to_string(), Value::String("StringBuilder".to_string()));
+                        fields.insert("__buffer".to_string(), Value::String(String::new()));
+                        let obj = crate::value::ObjectData { class_name: "StringBuilder".to_string(), fields };
+                        return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                    }
+                    _ => {
+                        // Create a generic object
+                        let mut fields = std::collections::HashMap::new();
+                        fields.insert("__type".to_string(), Value::String(type_name.clone()));
+                        let obj = crate::value::ObjectData { class_name: type_name, fields };
+                        return Ok(Value::Object(std::rc::Rc::new(std::cell::RefCell::new(obj))));
+                    }
+                }
+            }
+
+            // ===== CALLBYNAME =====
+            "callbyname" | "microsoft.visualbasic.interaction.callbyname" => {
+                // CallByName(obj, memberName, callType, args...)
+                // callType: 1=Method, 2=Get, 4=Set, 8=Let
+                let obj_val = arg_values.get(0).cloned().unwrap_or(Value::Nothing);
+                let member = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
+                let call_type = arg_values.get(2).map(|v| v.as_integer().unwrap_or(1)).unwrap_or(1);
+                let member_lower = member.to_lowercase();
+
+                if let Value::Object(obj_ref) = &obj_val {
+                    match call_type {
+                        2 | 8 => {
+                            // Get property
+                            let obj_data = obj_ref.borrow();
+                            if let Some(val) = obj_data.fields.get(&member_lower) {
+                                return Ok(val.clone());
+                            }
+                            return Ok(Value::Nothing);
+                        }
+                        4 => {
+                            // Set property
+                            let set_val = arg_values.get(3).cloned().unwrap_or(Value::Nothing);
+                            obj_ref.borrow_mut().fields.insert(member_lower, set_val);
+                            return Ok(Value::Nothing);
+                        }
+                        _ => {
+                            // Method call (call_type = 1)
+                            let class_name = obj_ref.borrow().class_name.clone();
+                            // Check for a sub or function with name "classname.member"
+                            let qualified = format!("{}.{}", class_name.to_lowercase(), member_lower);
+                            let method_args: Vec<Value> = arg_values[3..].to_vec();
+                            if let Some(sub) = self.subs.get(&qualified).cloned() {
+                                return self.call_user_sub(&sub, &method_args, Some(obj_ref.clone()));
+                            }
+                            if let Some(func) = self.functions.get(&qualified).cloned() {
+                                return self.call_user_function(&func, &method_args, Some(obj_ref.clone()));
+                            }
+                            // Try direct method name
+                            if let Some(sub) = self.subs.get(&member_lower).cloned() {
+                                return self.call_user_sub(&sub, &method_args, Some(obj_ref.clone()));
+                            }
+                            if let Some(func) = self.functions.get(&member_lower).cloned() {
+                                return self.call_user_function(&func, &method_args, Some(obj_ref.clone()));
+                            }
+                            return Err(RuntimeError::Custom(format!("CallByName: method '{}' not found on '{}'", member, class_name)));
+                        }
+                    }
+                }
+                // For non-object types, try to call as a method on the value
+                if call_type == 2 || call_type == 8 {
+                    // Get — try as_string on common types
+                    return Ok(Value::Nothing);
+                }
+                return Err(RuntimeError::Custom(format!("CallByName: target is not an object")));
             }
 
             // ===== TUPLE.CREATE =====
