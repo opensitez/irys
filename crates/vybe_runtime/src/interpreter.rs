@@ -5877,6 +5877,79 @@ impl Interpreter {
 
     fn call_method(&mut self, obj: &Expression, method: &Identifier, args: &[Expression]) -> Result<Value, RuntimeError> {
         let method_name = method.as_str().to_lowercase();
+
+        // ── Static Class Dispatch ───────────────────────────────────────
+        if let Expression::Variable(name) = obj {
+            let class_name = name.as_str().to_lowercase();
+            match class_name.as_str() {
+                "math" | "system.math" => {
+                    let arg_values: Vec<Value> = args.iter().map(|a| self.evaluate_expr(a)).collect::<Result<_,_>>()?;
+                    use crate::builtins::math_fns::*;
+                    match method_name.as_str() {
+                        "abs" => return abs_fn(&arg_values),
+                        "ceiling" => return ceiling_fn(&arg_values),
+                        "cos" => return cos_fn(&arg_values),
+                        "exp" => return exp_fn(&arg_values),
+                        "floor" => return floor_fn(&arg_values),
+                        "log" => return log_fn(&arg_values),
+                        "max" => return max_fn(&arg_values),
+                        "min" => return min_fn(&arg_values),
+                        "pow" => return pow_fn(&arg_values),
+                        "round" => return round_fn(&arg_values),
+                        "sign" => return sgn_fn(&arg_values),
+                        "sin" => return sin_fn(&arg_values),
+                        "sqrt" => return sqr_fn(&arg_values),
+                        "tan" => return tan_fn(&arg_values),
+                        "truncate" => return fix_fn(&arg_values), // Fix truncates
+                        "atan" => return atn_fn(&arg_values),
+                        "atan2" => return atan2_fn(&arg_values),
+                        _ => return Err(RuntimeError::UndefinedFunction(format!("Math.{}", method_name))),
+                    }
+                }
+                "file" | "system.io.file" => {
+                    let arg_values: Vec<Value> = args.iter().map(|a| self.evaluate_expr(a)).collect::<Result<_,_>>()?;
+                    use crate::builtins::file_fns::*;
+                    match method_name.as_str() {
+                        "readalltext" => return file_readalltext_fn(&arg_values),
+                        "writealltext" => return file_writealltext_fn(&arg_values),
+                        "appendalltext" => return file_appendalltext_fn(&arg_values),
+                        "readalllines" => return file_readalllines_fn(&arg_values),
+                        "exists" => return file_exists_fn(&arg_values),
+                        "delete" => return file_delete_fn(&arg_values),
+                        "copy" => return file_copy_fn(&arg_values),
+                        "move" => return file_move_fn(&arg_values),
+                        _ => return Err(RuntimeError::UndefinedFunction(format!("File.{}", method_name))),
+                    }
+                }
+                "directory" | "system.io.directory" => {
+                    let arg_values: Vec<Value> = args.iter().map(|a| self.evaluate_expr(a)).collect::<Result<_,_>>()?;
+                    use crate::builtins::file_fns::*;
+                    match method_name.as_str() {
+                        "exists" => return directory_exists_fn(&arg_values),
+                        "createdirectory" => return directory_createdirectory_fn(&arg_values),
+                        "delete" => return directory_delete_fn(&arg_values),
+                        "getfiles" => return directory_getfiles_fn(&arg_values),
+                        "getdirectories" => return directory_getdirectories_fn(&arg_values),
+                        "getcurrentdirectory" => return directory_getcurrentdirectory_fn(),
+                        _ => return Err(RuntimeError::UndefinedFunction(format!("Directory.{}", method_name))),
+                    }
+                }
+                "path" | "system.io.path" => {
+                    let arg_values: Vec<Value> = args.iter().map(|a| self.evaluate_expr(a)).collect::<Result<_,_>>()?;
+                    use crate::builtins::file_fns::*;
+                    match method_name.as_str() {
+                        "combine" => return path_combine_fn(&arg_values),
+                        "getfilename" => return path_getfilename_fn(&arg_values),
+                        "getdirectoryname" => return path_getdirectoryname_fn(&arg_values),
+                        "getextension" => return path_getextension_fn(&arg_values),
+                        "changeextension" => return path_changeextension_fn(&arg_values),
+                        _ => return Err(RuntimeError::UndefinedFunction(format!("Path.{}", method_name))),
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // ── MyBase dispatch ─────────────────────────────────────────────
         // MyBase.Method() dispatches to the parent class's method on the
         // same object instance (Me).
@@ -5974,6 +6047,11 @@ impl Interpreter {
                                 .collect::<Result<Vec<_>, _>>()?;
                             return stringbuilder_method_fn("tostring", &obj_val, &arg_values);
                         }
+                        }
+                    if let Value::Date(ole) = &obj_val {
+                         let arg_values: Vec<Value> = args.iter().map(|a| self.evaluate_expr(a)).collect::<Result<_,_>>()?;
+                         let fmt = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
+                         return Ok(Value::String(format_ole_date(*ole, &fmt)));
                     }
                     return Ok(Value::String(obj_val.as_string()));
                 }
@@ -6215,11 +6293,7 @@ impl Interpreter {
                         }
                         return Err(RuntimeError::Custom("DateTime.Subtract requires a DateTime argument".to_string()));
                     }
-                    // ToString with format
-                    "tostring" => {
-                        let fmt = arg_values.get(0).map(|v| v.as_string()).unwrap_or_default();
-                        return Ok(Value::String(format_ole_date(*ole_val, &fmt)));
-                    }
+
                     "toshortdatestring" => return Ok(Value::String(ole_to_dt(*ole_val).format("%m/%d/%Y").to_string())),
                     "tolongdatestring" => return Ok(Value::String(ole_to_dt(*ole_val).format("%A, %B %d, %Y").to_string())),
                     "toshorttimestring" => return Ok(Value::String(ole_to_dt(*ole_val).format("%H:%M").to_string())),
@@ -6328,6 +6402,7 @@ impl Interpreter {
                         };
                         return Ok(Value::String(result));
                     }
+
                     "insert" => {
                         let idx = arg_values.get(0).and_then(|v| v.as_integer().ok()).unwrap_or(0) as usize;
                         let ins = arg_values.get(1).map(|v| v.as_string()).unwrap_or_default();
@@ -9388,6 +9463,14 @@ impl Interpreter {
                     }
                     "count" => {
                         return Ok(Value::Integer(d.borrow().count()));
+                    }
+                    "keys" => {
+                        let keys = d.borrow().keys();
+                        return Ok(Value::Array(keys));
+                    }
+                    "values" => {
+                        let vals = d.borrow().values();
+                        return Ok(Value::Array(vals));
                     }
                     "trygetvalue" => {
                         let key = self.evaluate_expr(&args[0])?;
@@ -13214,6 +13297,26 @@ fn format_ole_date(ole: f64, fmt: &str) -> String {
     if fmt.is_empty() {
         return dt.format("%m/%d/%Y %H:%M:%S").to_string();
     }
+
+    // Standard single-letter formats
+    if fmt.len() == 1 {
+        match fmt {
+            "d" => return dt.format("%m/%d/%Y").to_string(), // Short date
+            "D" => return dt.format("%A, %B %d, %Y").to_string(), // Long date
+            "t" => return dt.format("%H:%M").to_string(), // Short time
+            "T" => return dt.format("%H:%M:%S").to_string(), // Long time
+            "f" => return dt.format("%A, %B %d, %Y %H:%M").to_string(), // Full date/time (short time)
+            "F" => return dt.format("%A, %B %d, %Y %H:%M:%S").to_string(), // Full date/time (long time)
+            "g" => return dt.format("%m/%d/%Y %H:%M").to_string(), // General date (short time)
+            "G" => return dt.format("%m/%d/%Y %H:%M:%S").to_string(), // General date (long time)
+            "M" | "m" => return dt.format("%B %d").to_string(), // Month/Day
+            "Y" | "y" => return dt.format("%B, %Y").to_string(), // Year/Month
+            "s" => return dt.format("%Y-%m-%dT%H:%M:%S").to_string(), // Sortable
+            "u" => return dt.format("%Y-%m-%d %H:%M:%SZ").to_string(), // Universal sortable
+            _ => {}
+        }
+    }
+
     // Convert .NET format strings to chrono format
     let chrono_fmt = fmt
         .replace("yyyy", "%Y").replace("yy", "%y")
