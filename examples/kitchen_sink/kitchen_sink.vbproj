@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>kitchen_sink</RootNamespace>
+    <AssemblyName>kitchen_sink</AssemblyName>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <StartupObject>kitchen_sink.KitchenSinkForm</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="KitchenSinkForm.vb">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="KitchenSinkForm.Designer.vb">
+      <DependentUpon>KitchenSinkForm.vb</DependentUpon>
+    </Compile>
+  </ItemGroup>
+</Project>
