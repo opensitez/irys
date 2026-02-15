@@ -10939,9 +10939,9 @@ impl Interpreter {
                         }
                     }
                     "tryupdate" => {
-                        let key = self.evaluate_expr(&args[0])?;
-                        let new_val = self.evaluate_expr(&args[1])?;
-                        let comparison = self.evaluate_expr(&args[2])?;
+                        let _key = self.evaluate_expr(&args[0])?;
+                        let _new_val = self.evaluate_expr(&args[1])?;
+                        let _comparison = self.evaluate_expr(&args[2])?;
                         // Comparison value also needs to be passed? ConcurrentDictionary::try_update doesn't exist in my impl?? 
                         // Wait, I didn't implement try_update in concurrent_collections.rs!
                         // I implemented add_or_update, try_add, try_get_value, try_remove, get_or_add.
