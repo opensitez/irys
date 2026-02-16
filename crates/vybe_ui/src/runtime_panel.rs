@@ -177,7 +177,28 @@ fn ControlTree(props: ControlTreeProps) -> Element {
                 
                 let wrapper_style = if is_flow_or_table {
                     // Static positioning for flow/table layouts
-                    format!("position: relative; width: {}px; height: {}px; margin: 2px;", w, h)
+                    let mut s = format!("position: relative; margin: 2px;");
+                    
+                    if let Some(p) = parent {
+                        if matches!(p.control_type, ControlType::TableLayoutPanel) {
+                            let grid_col = control.properties.get_int("Column").unwrap_or(0);
+                            let grid_row = control.properties.get_int("Row").unwrap_or(0);
+                            // Grid lines are 1-based
+                            s.push_str(&format!(" grid-column: {}; grid-row: {};", grid_col + 1, grid_row + 1));
+                            
+                            // If Dock.Fill (5), force 100% width/height to fill the cell
+                            if dock_val == 5 {
+                                s.push_str(" width: 100%; height: 100%;");
+                            } else {
+                                s.push_str(&format!(" width: {}px; height: {}px;", w, h));
+                            }
+                        } else {
+                             s.push_str(&format!(" width: {}px; height: {}px;", w, h));
+                        }
+                    } else {
+                         s.push_str(&format!(" width: {}px; height: {}px;", w, h));
+                    }
+                    s
                 } else {
                     match dock_val {
                         1 => "position: absolute; z-index: 10; left: 0; top: 0; width: 100%; outline: none;".to_string(), // DockStyle.Top
@@ -1878,6 +1899,8 @@ fn process_side_effects(
                                                 ctrl.set_back_color(css);
                                             }
                                         },
+                                        "column" => { ctrl.properties.set_raw("Column", vybe_forms::PropertyValue::Integer(value.as_integer().unwrap_or(0))); },
+                                        "row" => { ctrl.properties.set_raw("Row", vybe_forms::PropertyValue::Integer(value.as_integer().unwrap_or(0))); },
                                         "forecolor" => {
                                             if let Some(css) = value_to_css_color(&value) {
                                                 ctrl.set_fore_color(css);

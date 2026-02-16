@@ -83,19 +83,24 @@ statement = _{
     | synclock_statement
 }
 dim_new_keyword = { ^"New" }
-dim_statement = {
-    ^"Dim" ~ identifier ~
+dim_declaration_part = {
+    identifier ~
     ("(" ~ array_bounds? ~ ")")? ~
     (^"As" ~ dim_new_keyword? ~ type_name ~ ("(" ~ argument_list? ~ ")")? ~ (from_initializer | with_initializer)?)? ~
     ("=" ~ (array_literal | expression))?
+}
+
+dim_statement = {
+    ^"Dim" ~ dim_declaration_part ~ ("," ~ dim_declaration_part)*
 }
 
 static_statement = { ^"Static" ~ identifier ~ (^"As" ~ type_name)? ~ ("=" ~ expression)? }
 const_statement = { visibility_modifier? ~ ^"Const" ~ identifier ~ ^"As" ~ type_name ~ "=" ~ expression }
 set_statement = { ^"Set" ~ identifier ~ "=" ~ expression }
 compound_assign_op = { "+=" | "-=" | "*=" | "/=" | "\\=" | "&=" | "^=" | "<<=" | ">>=" }
-compound_assign_statement = { identifier ~ ("." ~ identifier)* ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? ~ compound_assign_op ~ expression }
-assign_statement = { identifier ~ ("." ~ identifier)* ~ ("(" ~ expression ~ ("," ~ expression)* ~ ")")? ~ "=" ~ expression }
+l_value_expression = { identifier ~ ( ("." ~ member_identifier) | ("(" ~ argument_list? ~ ")") )* }
+compound_assign_statement = { l_value_expression ~ compound_assign_op ~ expression }
+assign_statement = { l_value_expression ~ "=" ~ expression }
 preserve_keyword = { ^"Preserve" }
 redim_statement = { ^"ReDim" ~ preserve_keyword? ~ identifier ~ "(" ~ array_bounds ~ ")" }
 raiseevent_statement = { ^"RaiseEvent" ~ identifier ~ ("(" ~ argument_list? ~ ")")? }
@@ -266,8 +271,9 @@ handles_clause = { ^"Handles" ~ dotted_identifier ~ ("," ~ dotted_identifier)* }
 sub_decl = {
     attribute_line* ~
     sub_modifier* ~ ^"Sub" ~ sub_name ~ "(" ~ param_list? ~ ")" ~ handles_clause?
-    ~ (sub_inline_body | sub_block_body)
+    ~ (sub_inline_body | sub_block_body | abstract_body)
 }
+abstract_body = { &(NEWLINE | EOI) }
 sub_inline_body = { ":" ~ statement? ~ (":" ~ statement)* ~ ":" ~ sub_end }
 sub_block_body = { (NEWLINE | EOI) ~ (!sub_end ~ line)* ~ sub_end }
 sub_end = { ^"End" ~ ^"Sub" }
@@ -275,7 +281,7 @@ sub_end = { ^"End" ~ ^"Sub" }
 function_decl = {
     attribute_line* ~
     sub_modifier* ~ ^"Function" ~ identifier ~ "(" ~ param_list? ~ ")" ~ (^"As" ~ type_name)?
-    ~ (func_inline_body | func_block_body)
+    ~ (func_inline_body | func_block_body | abstract_body)
 }
 func_inline_body = { ":" ~ statement? ~ (":" ~ statement)* ~ ":" ~ func_end }
 func_block_body = { (NEWLINE | EOI) ~ (!func_end ~ line)* ~ func_end }
@@ -308,7 +314,7 @@ class_decl = {
     class_modifier* ~ ^"Class" ~ identifier ~ (NEWLINE | EOI)
     ~ inherits_line?
     ~ implements_line?
-    ~ (!class_end ~ (property_decl | auto_property_line | sub_decl | function_decl | event_line | delegate_line | field_line | dim_line | enum_decl | imports_statement | attribute_line | NEWLINE | COMMENT))*
+    ~ (!class_end ~ (class_decl | property_decl | auto_property_line | sub_decl | function_decl | const_statement_line | event_line | delegate_line | field_line | dim_line | enum_decl | imports_statement | attribute_line | NEWLINE | COMMENT))*
     ~ class_end
 }
 class_modifier = _{ partial_keyword | must_inherit_keyword | not_inheritable_keyword | visibility_modifier }
@@ -338,7 +344,7 @@ interface_event = { ^"Event" ~ identifier ~ (^"As" ~ type_name | "(" ~ param_lis
 structure_decl = {
     visibility_modifier? ~ ^"Structure" ~ identifier ~ (NEWLINE | EOI)
     ~ implements_line?
-    ~ (!structure_end ~ (property_decl | auto_property_line | sub_decl | function_decl | field_line | dim_line | NEWLINE | COMMENT))*
+    ~ (!structure_end ~ (property_decl | auto_property_line | sub_decl | function_decl | const_statement_line | field_line | dim_line | NEWLINE | COMMENT))*
     ~ structure_end
 }
 structure_end = { ^"End" ~ ^"Structure" }
@@ -376,7 +382,7 @@ field_line = _{ field_decl ~ (NEWLINE | EOI) }
 
 // Auto-implemented property: Public Property Name As String [= defaultValue]
 auto_property_decl = {
-    (^"Public" | ^"Private" | ^"Protected")? ~ (^"ReadOnly" | ^"WriteOnly")? ~ ^"Property" ~ identifier ~ (^"As" ~ type_name)? ~ ("=" ~ expression)?
+    (^"Public" | ^"Private" | ^"Protected")? ~ (^"Overrides" | ^"Overloads")? ~ (^"ReadOnly" | ^"WriteOnly")? ~ ^"Property" ~ identifier ~ (^"As" ~ dim_new_keyword? ~ type_name)? ~ ("=" ~ expression)?
 }
 auto_property_line = _{ auto_property_decl ~ (NEWLINE | EOI) }
 

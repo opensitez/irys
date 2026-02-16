@@ -552,6 +552,94 @@ impl Interpreter {
         }
     }
 
+    // Helper to collect all fields including inherited ones
+    fn collect_fields(&mut self, class_name: &str) -> HashMap<String, Value> {
+        let mut fields = HashMap::new();
+        
+        let resolved = self.resolve_class_key(class_name);
+        if let Some(cls) = resolved.and_then(|k| self.classes.get(&k).cloned()) {
+             if let Some(parent_type) = &cls.inherits {
+                 let parent_name = match parent_type {
+                     vybe_parser::VBType::Custom(n) => Some(n.clone()),
+                     vybe_parser::VBType::Object => None,
+                     _ => None,
+                 };
+                 
+                 if let Some(p_name) = parent_name {
+                     let parent_fields = self.collect_fields(&p_name);
+                     fields.extend(parent_fields);
+                 }
+             }
+
+             // Add/Override with current class fields
+             for field in &cls.fields {
+                 let init_val = if let Some(expr) = &field.initializer {
+                     self.evaluate_expr(expr).unwrap_or(Value::Nothing) 
+                 } else {
+                     match &field.var_type {
+                         Some(t) => match t {
+                             vybe_parser::VBType::Integer => Value::Integer(0),
+                             vybe_parser::VBType::Long => Value::Long(0),
+                             vybe_parser::VBType::Single => Value::Single(0.0),
+                             vybe_parser::VBType::Double => Value::Double(0.0),
+                             vybe_parser::VBType::String => Value::String("".to_string()),
+                             vybe_parser::VBType::Boolean => Value::Boolean(false),
+                             vybe_parser::VBType::Custom(s) => {
+                                 let s_lower = s.to_lowercase();
+                                 if s_lower.contains("system.windows.forms.") || 
+                                    s_lower == "button" || 
+                                    s_lower == "label" || 
+                                    s_lower == "textbox" || 
+                                    s_lower == "checkbox" || 
+                                    s_lower == "radiobutton" || 
+                                    s_lower == "form" ||
+                                    s_lower == "control"
+                                 {
+                                     Value::Nothing 
+                                 } else {
+                                     Value::Nothing
+                                 }
+                             },
+                             _ => Value::Nothing,
+                         },
+                         None => Value::Nothing,
+                     }
+                 };
+                 fields.insert(field.name.as_str().to_lowercase(), init_val);
+             }
+        } 
+
+        // Always try to inject defaults for built-in types (whether they were found in classes or not)
+        // This covers "Form" (if in classes), "Control", etc.
+        let c_lower = class_name.to_lowercase();
+        if (c_lower == "form" || c_lower == "control" || c_lower.starts_with("system.windows.forms.")) && !fields.contains_key("__type") {
+             // Inject base control fields if missing
+             if !fields.contains_key("__is_control") {
+                 fields.insert("__type".to_string(), Value::String(class_name.to_string()));
+                 fields.insert("__is_control".to_string(), Value::Boolean(true));
+                 fields.insert("name".to_string(), Value::String(String::new()));
+                 fields.insert("text".to_string(), Value::String(String::new()));
+                 fields.insert("visible".to_string(), Value::Boolean(true));
+                 fields.insert("enabled".to_string(), Value::Boolean(true));
+                 fields.insert("left".to_string(), Value::Integer(0));
+                 fields.insert("top".to_string(), Value::Integer(0));
+                 fields.insert("width".to_string(), Value::Integer(300));
+                 fields.insert("height".to_string(), Value::Integer(300));
+                 fields.insert("tag".to_string(), Value::Nothing);
+                 fields.insert("tabindex".to_string(), Value::Integer(0));
+                 fields.insert("backcolor".to_string(), Value::String(String::new()));
+                 fields.insert("forecolor".to_string(), Value::String(String::new()));
+                 fields.insert("font".to_string(), Value::Nothing);
+                 fields.insert("anchor".to_string(), Value::Integer(5));
+                 fields.insert("dock".to_string(), Value::Integer(0));
+             }
+
+             // Type-specific defaults
+             Self::init_control_type_defaults(class_name, &mut fields);
+        }
+        
+        fields
+    }
     /// Map .NET ConsoleColor (0-15) to ANSI escape code.
     fn console_color_to_ansi_fg(color: i32) -> &'static str {
         match color {
@@ -1296,11 +1384,33 @@ impl Interpreter {
         })))
     }
 
-    /// Create a System.Windows.Forms.PaintEventArgs stub.
+    /// Create a System.Windows.Forms.PaintEventArgs with a Graphics object linked to the control.
+    pub fn make_paint_event_args_for_control(control: Value, control_name: &str) -> Value {
+        // Create Graphics object linked to this control
+        let mut g_fields = std::collections::HashMap::new();
+        g_fields.insert("__control_name".to_string(), Value::String(control_name.to_string()));
+        g_fields.insert("__control".to_string(), control.clone());
+        g_fields.insert("__type".to_string(), Value::String("Graphics".to_string()));
+        let graphics = Value::Object(std::rc::Rc::new(std::cell::RefCell::new(crate::value::ObjectData {
+            drawing_commands: Vec::new(),
+            class_name: "Graphics".to_string(),
+            fields: g_fields,
+        })));
+
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("__type".to_string(), Value::String("PaintEventArgs".to_string()));
+        fields.insert("graphics".to_string(), graphics);
+        fields.insert("cliprectangle".to_string(), Value::String("0, 0, 0, 0".to_string()));
+        Value::Object(std::rc::Rc::new(std::cell::RefCell::new(crate::value::ObjectData { drawing_commands: Vec::new(),
+            class_name: "PaintEventArgs".to_string(),
+            fields,
+        })))
+    }
+
+    /// Create a System.Windows.Forms.PaintEventArgs stub (no control link).
     pub fn make_paint_event_args() -> Value {
         let mut fields = std::collections::HashMap::new();
         fields.insert("__type".to_string(), Value::String("PaintEventArgs".to_string()));
-        // Graphics and ClipRectangle are stubs
         fields.insert("cliprectangle".to_string(), Value::String("0, 0, 0, 0".to_string()));
         Value::Object(std::rc::Rc::new(std::cell::RefCell::new(crate::value::ObjectData { drawing_commands: Vec::new(),
             class_name: "PaintEventArgs".to_string(),
@@ -1354,8 +1464,11 @@ impl Interpreter {
                 Self::make_form_closing_event_args(3), // UserClosing
             "formclosed" =>
                 Self::make_form_closed_event_args(3),
-            "paint" =>
-                Self::make_paint_event_args(),
+            "paint" => {
+                // Create PaintEventArgs with Graphics linked to the control
+                let ctrl = self.resolve_control_as_sender(control_name);
+                Self::make_paint_event_args_for_control(ctrl, control_name)
+            }
             // All other events use base EventArgs
             _ => Self::make_event_args(),
         };
@@ -1597,20 +1710,22 @@ impl Interpreter {
 
     fn declare(&mut self, decl: &Declaration) -> Result<(), RuntimeError> {
         match decl {
-            Declaration::Variable(var) => {
-                if !self.env.exists_in_current_scope(var.name.as_str()) {
-                    let val = if let Some(expr) = &var.initializer {
-                        self.evaluate_expr(expr)?
-                    } else {
-                        default_value_for_type(&var.name.as_str(), &var.var_type)
-                    };
-                    
-                    let key = if let Some(module) = &self.current_module {
-                        format!("{}.{}", module, var.name.as_str()).to_lowercase()
-                    } else {
-                        var.name.as_str().to_lowercase()
-                    };
-                    self.env.define(&key, val);
+            Declaration::Variable(vars) => {
+                for var in vars {
+                    if !self.env.exists_in_current_scope(var.name.as_str()) {
+                        let val = if let Some(expr) = &var.initializer {
+                            self.evaluate_expr(expr)?
+                        } else {
+                            default_value_for_type(&var.name.as_str(), &var.var_type)
+                        };
+                        
+                        let key = if let Some(module) = &self.current_module {
+                            format!("{}.{}", module, var.name.as_str()).to_lowercase()
+                        } else {
+                            var.name.as_str().to_lowercase()
+                        };
+                        self.env.define(&key, val);
+                    }
                 }
                 Ok(())
             }
@@ -1696,6 +1811,15 @@ impl Interpreter {
                     }
                 }
 
+                // Hoist nested classes — register them as top-level classes
+                for nested in &class_decl.nested_classes {
+                    self.declare(&Declaration::Class(nested.clone()))?;
+                }
+                // Hoist nested enums — register them as top-level enums
+                for nested_enum in &class_decl.nested_enums {
+                    self.declare(&Declaration::Enum(nested_enum.clone()))?;
+                }
+
                 Ok(())
             }
             Declaration::Enum(enum_decl) => {
@@ -1761,6 +1885,8 @@ impl Interpreter {
                     fields: struct_decl.fields.clone(),
                     is_must_inherit: false,
                     is_not_inheritable: true, // structs can't be inherited
+                    nested_classes: Vec::new(),
+                    nested_enums: Vec::new(),
                 };
                 self.classes.insert(key.clone(), class);
                 self.structures.insert(key, struct_decl.clone());
@@ -1910,47 +2036,6 @@ impl Interpreter {
 
     /// Collect all fields (including inherited) for a class, initializing them
     /// from their declarations. Returns a HashMap suitable for ObjectData.fields.
-    fn collect_fields(&mut self, class_name: &str) -> HashMap<String, Value> {
-        let mut fields = HashMap::new();
-        fields.insert("__type".to_string(), Value::String(class_name.to_string()));
-
-        // Collect the class hierarchy (base first, derived last)
-        let mut chain = Vec::new();
-        let mut current = class_name.to_lowercase();
-        loop {
-            let key = match self.resolve_class_key(&current) {
-                Some(k) => k,
-                None => break,
-            };
-            let cls = match self.classes.get(&key).cloned() {
-                Some(c) => c,
-                None => break,
-            };
-            let base = cls.inherits.as_ref().and_then(|t| {
-                if let vybe_parser::VBType::Custom(n) = t { Some(n.to_lowercase()) } else { None }
-            });
-            chain.push(cls);
-            match base {
-                Some(b) => current = b,
-                None => break,
-            }
-        }
-        chain.reverse(); // base first
-
-        for cls in &chain {
-            for field in &cls.fields {
-                let field_name = field.name.as_str().to_lowercase();
-                let default_val = if let Some(init) = &field.initializer {
-                    self.evaluate_expr(init).unwrap_or(Value::Nothing)
-                } else {
-                    Value::Nothing
-                };
-                fields.insert(field_name, default_val);
-            }
-        }
-
-        fields
-    }
              
     // Helper to find a method in class hierarchy
     fn find_method(&self, class_name: &str, method_name: &str) -> Option<vybe_parser::ast::decl::MethodDecl> {
@@ -2048,31 +2133,33 @@ impl Interpreter {
 
     pub fn execute(&mut self, stmt: &Statement) -> Result<(), RuntimeError> {
         match stmt {
-            Statement::Dim(decl) => {
-                if let Some(bounds) = &decl.array_bounds {
-                    if bounds.len() == 1 {
-                        // 1-D array: Dim arr(10) As Integer
-                        let size = (self.evaluate_expr(&bounds[0])?.as_integer()? + 1) as usize;
-                        let default_val = default_value_for_type("", &decl.var_type);
-                        let arr = Value::Array(vec![default_val; size]);
-                        self.env.define(decl.name.as_str(), arr);
+            Statement::Dim(decls) => {
+                for decl in decls {
+                    if let Some(bounds) = &decl.array_bounds {
+                        if bounds.len() == 1 {
+                            // 1-D array: Dim arr(10) As Integer
+                            let size = (self.evaluate_expr(&bounds[0])?.as_integer()? + 1) as usize;
+                            let default_val = default_value_for_type("", &decl.var_type);
+                            let arr = Value::Array(vec![default_val; size]);
+                            self.env.define(decl.name.as_str(), arr);
+                        } else {
+                            // Multi-dimensional: Dim arr(3, 4) → nested arrays
+                            let dims: Vec<usize> = bounds.iter()
+                                .map(|b| self.evaluate_expr(b).and_then(|v| v.as_integer()).map(|i| (i + 1) as usize))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let default_val = default_value_for_type("", &decl.var_type);
+                            let arr = create_multi_dim_array(&dims, &default_val);
+                            self.env.define(decl.name.as_str(), arr);
+                        }
+                    } else if let Some(init) = &decl.initializer {
+                        // Variable with initializer: Dim x As Integer = 10 or Dim arr() = {1,2,3}
+                        let val = self.evaluate_expr(init)?;
+                        self.env.define(decl.name.as_str(), val);
                     } else {
-                        // Multi-dimensional: Dim arr(3, 4) → nested arrays
-                        let dims: Vec<usize> = bounds.iter()
-                            .map(|b| self.evaluate_expr(b).and_then(|v| v.as_integer()).map(|i| (i + 1) as usize))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let default_val = default_value_for_type("", &decl.var_type);
-                        let arr = create_multi_dim_array(&dims, &default_val);
-                        self.env.define(decl.name.as_str(), arr);
+                        // Regular variable: Dim x As Integer
+                        let val = default_value_for_type(&decl.name.as_str(), &decl.var_type);
+                        self.env.define(decl.name.as_str(), val);
                     }
-                } else if let Some(init) = &decl.initializer {
-                    // Variable with initializer: Dim x As Integer = 10 or Dim arr() = {1,2,3}
-                    let val = self.evaluate_expr(init)?;
-                    self.env.define(decl.name.as_str(), val);
-                } else {
-                    // Regular variable: Dim x As Integer
-                    let val = default_value_for_type(&decl.name.as_str(), &decl.var_type);
-                    self.env.define(decl.name.as_str(), val);
                 }
                 Ok(())
             }
@@ -2522,6 +2609,16 @@ impl Interpreter {
                     let idx_vals: Vec<usize> = indices.iter()
                         .map(|e| self.evaluate_expr(e).and_then(|v| v.as_integer()).map(|i| i as usize))
                         .collect::<Result<Vec<_>, _>>()?;
+
+                    // Try current object fields first
+                    if let Some(obj_rc) = &self.current_object {
+                        let mut obj = obj_rc.borrow_mut();
+                        if let Some(arr_val) = obj.fields.get_mut(&array_lower) {
+                            set_multi_dim_element(arr_val, &idx_vals, val)?;
+                            return Ok(());
+                        }
+                    }
+
                     let mut arr = self.env.get(array.as_str())?;
                     set_multi_dim_element(&mut arr, &idx_vals, val)?;
                     self.env.set(array.as_str(), arr)?;
@@ -7076,6 +7173,7 @@ impl Interpreter {
         // Handle Controls.* methods — full ControlCollection API
         if let Expression::MemberAccess(parent_expr, member) = obj {
             if member.as_str().eq_ignore_ascii_case("Controls") {
+                println!("[DEBUG] call_method intercepted Controls. Obj: {:?} Method: {}", parent_expr, method_name);
                 // Extract parent control name from parent_expr
                 // Me.pnlRoot.Controls → parent_name = "pnlRoot"
                 // Me.Controls → parent_name = "" (form-level)
@@ -7085,31 +7183,82 @@ impl Interpreter {
                         // "Me" means form-level
                         if name.eq_ignore_ascii_case("me") { String::new() } else { name.to_string() }
                     }
+                    Expression::Variable(id) => {
+                        let name = id.as_str();
+                        if name.eq_ignore_ascii_case("me") || name.eq_ignore_ascii_case("mybase") {
+                            String::new()
+                        } else {
+                            name.to_string()
+                        }
+                    }
                     _ => String::new(), // Variable("Me") or other → form-level
                 };
 
                 match method_name.as_str() {
                     "add" => {
+                        println!("[DEBUG] Inside Controls.Add handler. Args: {}", args.len());
                         if !args.is_empty() {
-                            let ctrl_val = self.evaluate_expr(&args[0])?;
+                            println!("[DEBUG] Arg0 expr: {:?}", &args[0]);
+
+
+                            let ctrl_val_res = self.evaluate_expr(&args[0]);
+                            if let Err(e) = &ctrl_val_res {
+                                println!("[ERROR] evaluate_expr(&args[0]) failed: {:?}", e);
+                            }
+                            let ctrl_val = ctrl_val_res?;
+                            
+                            // Evaluate optional column/row arguments BEFORE borrowing ctrl_val
+                            let mut col = -1;
+                            let mut row = -1;
+                            if args.len() == 3 {
+                                println!("[DEBUG] Evaluating arg1 (col): {:?}", &args[1]);
+                                let col_res = self.evaluate_expr(&args[1]);
+                                if let Err(e) = &col_res { println!("[ERROR] Arg1 failed: {:?}", e); }
+                                col = col_res?.as_integer().unwrap_or(0);
+                                
+                                println!("[DEBUG] Evaluating arg2 (row): {:?}", &args[2]);
+                                let row_res = self.evaluate_expr(&args[2]);
+                                if let Err(e) = &row_res { println!("[ERROR] Arg2 failed: {:?}", e); }
+                                row = row_res?.as_integer().unwrap_or(0);
+                            }
+
                             if let Value::Object(ctrl_obj) = &ctrl_val {
-                                let b = ctrl_obj.borrow();
+                                let mut b = ctrl_obj.borrow_mut();
+                                
+                                // NEW: Handle Add(control, column, row)
+                                if args.len() == 3 {
+                                    // Store as properties so runtime_panel can read them
+                                    b.fields.insert("Column".to_string(), Value::Integer(col));
+                                    b.fields.insert("Row".to_string(), Value::Integer(row));
+                                }
+                                
                                 let ctrl_type = b.fields.get("__type").map(|v| v.as_string()).unwrap_or_default();
-                                let ctrl_name = b.fields.get("name").map(|v| v.as_string()).unwrap_or_default();
+                                let mut ctrl_name = b.fields.get("name").map(|v| v.as_string()).unwrap_or_default();
+                                
+                                // Auto-generate name if empty
+                                if ctrl_name.is_empty() {
+                                    ctrl_name = generate_runtime_id();
+                                    b.fields.insert("name".to_string(), Value::String(ctrl_name.clone()));
+                                }
+
                                 let left = b.fields.get("left").and_then(|v| v.as_integer().ok()).unwrap_or(0);
                                 let top = b.fields.get("top").and_then(|v| v.as_integer().ok()).unwrap_or(0);
                                 let width = b.fields.get("width").and_then(|v| v.as_integer().ok()).unwrap_or(100);
                                 let height = b.fields.get("height").and_then(|v| v.as_integer().ok()).unwrap_or(30);
-                                drop(b);
-                                if !ctrl_name.is_empty() {
-                                    self.side_effects.push_back(crate::RuntimeSideEffect::AddControl {
-                                        form_name: String::new(),
-                                        control_name: ctrl_name.clone(),
-                                        control_type: ctrl_type,
-                                        left, top, width, height,
-                                        parent_name: parent_ctrl_name.clone(),
-                                    });
-                                }
+                                
+                                println!("[DEBUG] Interpreter.AddControl: name='{}' parent='{}' type='{}' col={} row={}", 
+                                    ctrl_name, parent_ctrl_name, ctrl_type, col, row);
+
+                                // IMPORTANT: Drop the borrow before calling evaluate_expr again or recursing
+                                drop(b); 
+                                
+                                self.side_effects.push_back(crate::RuntimeSideEffect::AddControl {
+                                    form_name: String::new(),
+                                    control_name: ctrl_name.clone(),
+                                    control_type: ctrl_type,
+                                    left, top, width, height,
+                                    parent_name: parent_ctrl_name.clone(),
+                                });
                                 // Also store the control as a field on the parent for Controls iteration
                                 if let Ok(parent_val) = self.evaluate_expr(parent_expr) {
                                     if let Value::Object(parent_ref) = &parent_val {
@@ -14422,7 +14571,7 @@ impl Interpreter {
                         }
                     }
                 }
-                if let Ok(obj_val) = self.evaluate_expr(obj) {
+                if let Ok(_obj_val) = self.evaluate_expr(obj) {
                      // ... existing logic ...
                 }
                 println!("DEBUG: Unknown method fallback. method={}. obj={:?}", method_name, obj);
@@ -14874,7 +15023,10 @@ impl Interpreter {
                 if let vybe_parser::ast::decl::MethodDecl::Sub(s) = method {
                     if let Some(handles_list) = &s.handles {
                         for h in handles_list {
-                            if h.to_lowercase() == target {
+                            let h_lower = h.to_lowercase();
+                            if h_lower == target {
+                                handlers.push(s.name.as_str().to_string());
+                            } else if target.starts_with("me.") && h_lower.replace("mybase.", "me.") == target {
                                 handlers.push(s.name.as_str().to_string());
                             }
                         }

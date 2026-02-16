@@ -97,7 +97,7 @@ fn try_parse_declaration(pair: Pair<Rule>) -> ParseResult<Option<Declaration>> {
     }
 }
 
-fn parse_dim_statement(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
+fn parse_dim_variable(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
     let inner = pair.into_inner();
     let mut name = Identifier::new("");
     let mut var_type = None;
@@ -183,6 +183,16 @@ fn parse_dim_statement(pair: Pair<Rule>) -> ParseResult<VariableDecl> {
         initializer,
         with_events: false,
     })
+}
+
+fn parse_dim_statement(pair: Pair<Rule>) -> ParseResult<Vec<VariableDecl>> {
+    let mut declarations = Vec::new();
+    for p in pair.into_inner() {
+        if p.as_rule() == Rule::dim_declaration_part {
+            declarations.push(parse_dim_variable(p)?);
+        }
+    }
+    Ok(declarations)
 }
 
 fn parse_const_statement(pair: Pair<Rule>) -> ParseResult<ConstDecl> {
@@ -481,7 +491,7 @@ fn parse_module_decl(pair: Pair<Rule>) -> ParseResult<Vec<Declaration>> {
             Rule::function_decl => declarations.push(Declaration::Function(parse_function_decl(p)?)),
             Rule::const_statement => declarations.push(Declaration::Constant(parse_const_statement(p)?)),
             Rule::dim_statement => declarations.push(Declaration::Variable(parse_dim_statement(p)?)),
-            Rule::field_decl => declarations.push(Declaration::Variable(parse_field_decl(p)?)),
+            Rule::field_decl => declarations.push(Declaration::Variable(vec![parse_field_decl(p)?])),
             Rule::class_decl => declarations.push(Declaration::Class(parse_class_decl(p)?)),
             Rule::enum_decl => declarations.push(Declaration::Enum(parse_enum_decl(p)?)),
             Rule::identifier | Rule::NEWLINE | Rule::module_end => {}
@@ -593,6 +603,8 @@ fn parse_class_decl(pair: Pair<Rule>) -> ParseResult<ClassDecl> {
     let mut fields = Vec::new();
     let mut is_must_inherit = false;
     let mut is_not_inheritable = false;
+    let mut nested_classes = Vec::new();
+    let mut nested_enums = Vec::new();
 
     for p in inner {
         match p.as_rule() {
@@ -629,13 +641,19 @@ fn parse_class_decl(pair: Pair<Rule>) -> ParseResult<ClassDecl> {
             }
             Rule::sub_decl => methods.push(MethodDecl::Sub(parse_sub_decl(p)?)),
             Rule::function_decl => methods.push(MethodDecl::Function(parse_function_decl(p)?)),
-            Rule::dim_statement => {
-                if let Ok(crate::ast::stmt::Statement::Dim(decl)) = parse_statement(p) {
-                    fields.push(decl);
-                }
+        Rule::dim_statement => {
+            if let Ok(crate::ast::stmt::Statement::Dim(decls)) = parse_statement(p) {
+                fields.extend(decls);
             }
+        }
             Rule::field_decl => {
                 fields.push(parse_field_decl(p)?);
+            }
+            Rule::class_decl => {
+                nested_classes.push(parse_class_decl(p)?);
+            }
+            Rule::enum_decl => {
+                nested_enums.push(parse_enum_decl(p)?);
             }
             Rule::NEWLINE | Rule::class_end => {}
             _ => {}
@@ -653,6 +671,8 @@ fn parse_class_decl(pair: Pair<Rule>) -> ParseResult<ClassDecl> {
         fields,
         is_must_inherit,
         is_not_inheritable,
+        nested_classes,
+        nested_enums,
     })
 }
 
@@ -875,58 +895,42 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
         }
         Rule::assign_statement => {
             let mut inner = pair.into_inner();
-            let target = Identifier::new(inner.next().unwrap().as_str());
+            // First child is l_value_expression
+            let lhs_pair = inner.next().unwrap();
+            let lhs_expr = parse_l_value_expression(lhs_pair)?;
+            let value_expr = parse_expression(inner.next().unwrap())?;
 
-            // Collect all parts: identifiers (for member access) and expressions (for array indices or value)
-            let mut members = Vec::new();
-            let mut indices = Vec::new();
-            let mut expressions = Vec::new();
-
-            for p in inner {
-                match p.as_rule() {
-                    Rule::identifier => {
-                        members.push(Identifier::new(p.as_str()));
-                    }
-                    Rule::expression => {
-                        expressions.push(parse_expression(p)?);
-                    }
-                    _ => {}
+            match lhs_expr {
+                Expression::Variable(id) => {
+                    Ok(Statement::Assignment {
+                        target: id,
+                        value: value_expr,
+                    })
                 }
-            }
-
-            // The last expression is always the value being assigned
-            let value = expressions.pop().unwrap();
-
-            // If there are remaining expressions, they are array indices
-            if !expressions.is_empty() {
-                indices = expressions;
-            }
-
-            // Determine the type of assignment
-            if !indices.is_empty() {
-                // Array assignment: arr(5) = value
-                Ok(Statement::ArrayAssignment {
-                    array: target,
-                    indices,
-                    value,
-                })
-            } else if members.is_empty() {
-                // Simple assignment: x = value
-                Ok(Statement::Assignment {
-                    target,
-                    value,
-                })
-            } else {
-                // Member assignment: obj.prop = value
-                let mut obj = Expression::Variable(target);
-                for i in 0..members.len() - 1 {
-                    obj = Expression::MemberAccess(Box::new(obj), members[i].clone());
+                Expression::MemberAccess(obj, member) => {
+                    Ok(Statement::MemberAssignment {
+                        object: *obj,
+                        member,
+                        value: value_expr,
+                    })
                 }
-                Ok(Statement::MemberAssignment {
-                    object: obj,
-                    member: members.last().unwrap().clone(),
-                    value,
-                })
+                Expression::ArrayAccess(arr, indices) => {
+                    Ok(Statement::ArrayAssignment {
+                        array: arr,
+                        indices,
+                        value: value_expr,
+                    })
+                }
+                Expression::Call(func, args) => {
+                    // Treat function call on LHS as array assignment (e.g. arr(i) = val)
+                    // The AST expects 'array' as identifier and 'indices' as expressions.
+                    Ok(Statement::ArrayAssignment {
+                        array: func,
+                        indices: args,
+                        value: value_expr,
+                    })
+                }
+                _ => Err(ParseError::Custom("Invalid assignment target".to_string())),
             }
         }
         Rule::set_statement => {
@@ -938,47 +942,85 @@ fn parse_statement(pair: Pair<Rule>) -> ParseResult<Statement> {
         }
         Rule::compound_assign_statement => {
             let mut inner = pair.into_inner();
-            let target = Identifier::new(inner.next().unwrap().as_str());
+            let lhs_pair = inner.next().unwrap();
+            let lhs_expr = parse_l_value_expression(lhs_pair)?;
+            
+            let op_pair = inner.next().unwrap();
+            let op = match op_pair.as_str() {
+                "+=" => CompoundOp::AddAssign,
+                "-=" => CompoundOp::SubtractAssign,
+                "*=" => CompoundOp::MultiplyAssign,
+                "/=" => CompoundOp::DivideAssign,
+                "\\=" => CompoundOp::IntDivideAssign,
+                "&=" => CompoundOp::ConcatAssign,
+                "^=" => CompoundOp::ExponentAssign,
+                "<<=" => CompoundOp::ShiftLeftAssign,
+                ">>=" => CompoundOp::ShiftRightAssign,
+                _ => return Err(ParseError::Custom("Unknown compound assignment operator".to_string())),
+            };
 
-            let mut members = Vec::new();
-            let mut indices = Vec::new();
-            let mut op = CompoundOp::AddAssign;
-            let mut expressions = Vec::new();
+            let value = parse_expression(inner.next().unwrap())?;
 
-            for p in inner {
-                match p.as_rule() {
-                    Rule::identifier => members.push(Identifier::new(p.as_str())),
-                    Rule::compound_assign_op => {
-                        op = match p.as_str() {
-                            "+=" => CompoundOp::AddAssign,
-                            "-=" => CompoundOp::SubtractAssign,
-                            "*=" => CompoundOp::MultiplyAssign,
-                            "/=" => CompoundOp::DivideAssign,
-                            "\\=" => CompoundOp::IntDivideAssign,
-                            "&=" => CompoundOp::ConcatAssign,
-                            "^=" => CompoundOp::ExponentAssign,
-                            "<<=" => CompoundOp::ShiftLeftAssign,
-                            ">>=" => CompoundOp::ShiftRightAssign,
-                            _ => CompoundOp::AddAssign,
-                        };
-                    }
-                    Rule::expression => expressions.push(parse_expression(p)?),
-                    _ => {}
+            // Map AST structure to Statement::CompoundAssignment
+            // Note: CompoundAssignment AST struct is rigid: target: Identifier, members: Vec<Identifier>, indices: Vec<Expression>
+            // We need to decompose lhs_expr into these components if possible.
+            
+            match lhs_expr {
+                Expression::Variable(id) => {
+                     Ok(Statement::CompoundAssignment {
+                        target: id,
+                        members: vec![],
+                        indices: vec![],
+                        operator: op,
+                        value,
+                    })
                 }
+                Expression::MemberAccess(obj, member) => {
+                     // Decompose object... handling simple obj.prop or obj.prop1.prop2
+                     // This is tricky if obj is complex expression.
+                     // The AST Statement::CompoundAssignment handles target + list of members + optional indices at the end.
+                     // It does NOT support intermediate indices (e.g. obj.arr(0).prop += 1).
+                     
+                     // Try to flatten simple MemberAccess chain
+                     let mut parts = vec![member];
+                     let mut current = *obj;
+                     let mut root = None;
+                     
+                     loop {
+                         match current {
+                             Expression::Variable(id) => {
+                                 root = Some(id);
+                                 break;
+                             }
+                             Expression::MemberAccess(parent, m) => {
+                                 parts.push(m);
+                                 current = *parent;
+                             }
+                             _ => break, // Complex object (e.g. Call) -> cannot use CompoundAssignment AST 
+                         }
+                     }
+                     
+                     if let Some(r) = root {
+                         parts.reverse();
+                         Ok(Statement::CompoundAssignment {
+                            target: r,
+                            members: parts,
+                            indices: vec![],
+                            operator: op,
+                            value,
+                        })
+                     } else {
+                         // Fallback for complex L-values: expand to: LHS = LHS op RHS
+                         // LHS must be evaluated twice, which might verify side-effects, but is safeish for now.
+                         // Or error out if we want to be strict.
+                         Err(ParseError::Custom("Complex L-value in compound assignment not fully supported yet".to_string()))
+                     }
+                }
+                _ => Err(ParseError::Custom("Complex L-value in compound assignment not fully supported yet".to_string())),
             }
-            let value = expressions.pop().unwrap();
-            if !expressions.is_empty() {
-                indices = expressions;
-            }
-
-            Ok(Statement::CompoundAssignment {
-                target,
-                members,
-                indices,
-                operator: op,
-                value,
-            })
         }
+
+
         Rule::raiseevent_statement => {
             let mut inner = pair.into_inner();
             let event_name = Identifier::new(inner.next().unwrap().as_str());
@@ -1489,11 +1531,13 @@ fn parse_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
                             let mut found = false;
                             for decl in &program.declarations {
                                 if let Declaration::Sub(sub_decl) = decl {
-                                    if let Some(Statement::Dim(dim_decl)) = sub_decl.body.first() {
-                                        if let Some(expr) = &dim_decl.initializer {
-                                            parts.push(expr.clone());
-                                            found = true;
-                                            break;
+                                    if let Some(Statement::Dim(dim_decls)) = sub_decl.body.first() {
+                                        if let Some(first_decl) = dim_decls.first() {
+                                            if let Some(expr) = &first_decl.initializer {
+                                                parts.push(expr.clone());
+                                                found = true;
+                                                break;
+                                            }
                                         }
                                     }
                                 }
@@ -1992,7 +2036,11 @@ fn parse_lambda_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
                         // try_parse_declaration or other rules that might appear
                         if let Some(decl) = try_parse_declaration(item.clone())? {
                             match decl {
-                                Declaration::Variable(v) => body_stmts.push(Statement::Dim(v)),
+                                Declaration::Variable(vars) => {
+                                    for v in vars {
+                                        body_stmts.push(Statement::Dim(vec![v]));
+                                    }
+                                }
                                 Declaration::Constant(c) => body_stmts.push(Statement::Const(c)),
                                 _ => {}
                             }
@@ -2527,8 +2575,8 @@ fn parse_structure_decl(pair: Pair<Rule>) -> ParseResult<StructureDecl> {
             Rule::sub_decl => methods.push(MethodDecl::Sub(parse_sub_decl(p)?)),
             Rule::function_decl => methods.push(MethodDecl::Function(parse_function_decl(p)?)),
             Rule::dim_statement => {
-                if let Ok(Statement::Dim(decl)) = parse_statement(p) {
-                    fields.push(decl);
+                if let Ok(crate::ast::stmt::Statement::Dim(decls)) = parse_statement(p) {
+                    fields.extend(decls);
                 }
             }
             Rule::field_decl => {
@@ -2824,4 +2872,43 @@ fn parse_xml_name(pair: Pair<Rule>) -> crate::ast::xml::XmlName {
     } else {
         crate::ast::xml::XmlName { prefix: None, local: s.to_string() }
     }
+}
+
+fn parse_l_value_expression(pair: Pair<Rule>) -> ParseResult<Expression> {
+    let mut inner = pair.into_inner();
+    let primary = inner.next().unwrap();
+    let mut expr = parse_expression(primary)?;
+
+    // Handle postfix operations (member access, array/method calls)
+    for part in inner {
+        match part.as_rule() {
+             Rule::member_identifier => {
+                 let name = part.as_str();
+                 expr = Expression::MemberAccess(Box::new(expr), Identifier::new(name));
+             }
+             _ => {
+                 // It's (arg_list) -> parse arguments
+                 
+                 let args = if let Some(arg_list_pair) = part.into_inner().next() {
+                     parse_argument_list(arg_list_pair)?
+                 } else {
+                     vec![]
+                 };
+                 
+                 match expr {
+                     Expression::Variable(id) => {
+                         expr = Expression::Call(id, args);
+                     }
+                     Expression::MemberAccess(obj, member) => {
+                         expr = Expression::MethodCall(obj, member, args);
+                     }
+                     _ => {
+                         return Err(ParseError::Custom("Complex nested calls not supported yet".to_string()));
+                     }
+                 }
+             }
+        }
+    }
+    
+    Ok(expr)
 }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Statement {
     // Local declaration
-    Dim(super::VariableDecl),
+    Dim(Vec<super::VariableDecl>),
 
     // Constant declaration
     Const(super::ConstDecl),

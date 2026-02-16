@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Declaration {
-    Variable(VariableDecl),
+    Variable(Vec<VariableDecl>),
     Constant(ConstDecl),
     Sub(SubDecl),
     Function(FunctionDecl),
@@ -120,6 +120,10 @@ pub struct ClassDecl {
     pub is_must_inherit: bool,
     #[serde(default)]
     pub is_not_inheritable: bool,
+    #[serde(default)]
+    pub nested_classes: Vec<ClassDecl>,
+    #[serde(default)]
+    pub nested_enums: Vec<EnumDecl>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
